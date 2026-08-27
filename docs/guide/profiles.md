@@ -63,3 +63,20 @@ store:on_lock_lost(function(profile) end)
 ## Loading the same key twice
 
 `store:load` throws if the key is already loaded on this store. Use `store:get_loaded(key)` to look up an open profile and `store:wait_loaded` to wait for a load that is in progress.
+
+## Peeking without a lock
+
+To look at a key without taking its lock (a leaderboard entry, an offline player), `store:peek` reads it once with `GetAsync` and returns a read-only snapshot:
+
+```luau
+local peek = store:peek(key)   -- yields, one GetAsync
+peek:get_data()                -- stored data (template if missing), frozen
+peek.lock                      -- Lock of the current holder, or nil if its not session-locked. This is not up-to-date and its only retrieved once.
+peek:refresh()                 -- GetAsync again, also refreshes peek.lock
+```
+
+::: warning Newer servers make peek throw
+`store:peek` and `peek:refresh` throw if the stored value was written by a newer server with extra migrations, that is, the record lists migrations this store does not declare (or in a different order). The data cannot be interpreted by this server, so no snapshot is returned. Wrap the call in `pcall` if the store may run alongside newer versions of the game.
+:::
+
+A peek never writes, works while another server holds the key, and cannot be updated or passed to a transaction. See [PeekProfile](../api/peek-profile).

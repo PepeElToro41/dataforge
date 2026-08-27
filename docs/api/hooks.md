@@ -33,7 +33,7 @@ type Hook = {
 | `get_datastore(name)` | Returns the handle for a named store. Called once per store name. |
 | `warn(message)` | Receives non-fatal problems (a hook that threw, a write that could not be released) instead of a global `warn`. |
 
-## DatastoreHandle
+### DatastoreHandle
 
 ```luau
 type DatastoreHandle = {
@@ -47,7 +47,7 @@ type DatastoreHandle = {
 
 All methods throw on failure. `update_async(key, transform)` cancels when `transform` returns `nil` and returns the value stored after the call. `remove_async` is optional; it is used to delete transaction markers.
 
-## `dataforge.hooks.roblox`
+### Roblox Hook
 
 ```luau
 local hook = dataforge.hooks.roblox.create()
@@ -55,7 +55,7 @@ local hook = dataforge.hooks.roblox.create()
 
 Adapts `DataStoreService`; `job_id` is `game.JobId` and `warn` is the global `warn`. This is the default inside Roblox; you only need to call it yourself to share a hook explicitly.
 
-## `dataforge.hooks.memory`
+### In-Memory Hook
 
 ```luau
 local hook = dataforge.hooks.memory.create(scheduler)
@@ -90,7 +90,7 @@ type FailMode = "before" | "after"
 | `clear_failures()` | Drops pending injected failures. |
 | `dump(store, key)` | Deep copy of the stored record. |
 
-## Writing your own
+### Writing your own
 
 Implement `Hook` and `DatastoreHandle` over your backend and pass it as `_hook` to `create_store`. Requirements:
 
@@ -115,7 +115,7 @@ type Scheduler = {
 
 Same contract as `task.spawn` / `task.defer` / `task.wait` / `os.clock`.
 
-## `dataforge.schedulers.roblox`
+### Roblox Scheduler
 
 ```luau
 local scheduler = dataforge.schedulers.roblox.create()
@@ -123,7 +123,7 @@ local scheduler = dataforge.schedulers.roblox.create()
 
 Wraps the `task` library and `os.clock`. Default inside Roblox.
 
-## `dataforge.schedulers.virtual`
+### Virtual Scheduler
 
 ```luau
 local scheduler = dataforge.schedulers.virtual.create()
@@ -149,7 +149,7 @@ type VirtualScheduler = Scheduler & {
 
 `spawn` runs the function immediately until its first yield; `defer` queues it for the current time.
 
-## `dataforge.schedulers.zune`
+### Zune Scheduler
 
 ```luau
 local scheduler = require("@dataforge/schedulers/zune").create()

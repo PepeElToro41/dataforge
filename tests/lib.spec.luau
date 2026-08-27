@@ -9,6 +9,7 @@ local report = testlib.run(
 	require "./migrations.spec",
 	require "./profile.spec",
 	require "./lockless.spec",
+	require "./peek.spec",
 	require "./tx.spec",
 	require "./chaining.spec"
 )

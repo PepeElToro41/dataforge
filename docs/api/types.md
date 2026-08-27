@@ -54,6 +54,10 @@ Session-locked profile. See [Profile](./profile).
 
 Lockless profile. See [LocklessProfile](./lockless-profile).
 
+### `PeekProfile<T>` ★
+
+Read-only snapshot. See [PeekProfile](./peek-profile).
+
 ### `DataDispatcher<T>`
 
 ```luau

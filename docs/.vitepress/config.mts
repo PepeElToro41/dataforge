@@ -41,6 +41,7 @@ export default defineConfig({
 						{ text: "Store", link: "/api/store" },
 						{ text: "Profile", link: "/api/profile" },
 						{ text: "LocklessProfile", link: "/api/lockless-profile" },
+						{ text: "PeekProfile", link: "/api/peek-profile" },
 						{ text: "Transactions", link: "/api/transactions" },
 						{ text: "Hooks & Schedulers", link: "/api/hooks" },
 						{ text: "Types", link: "/api/types" },

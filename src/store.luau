@@ -6,6 +6,7 @@ local roblox_scheduler = require "./schedulers/roblox"
 local roblox_hook = require "./hooks/roblox"
 local profile = require "./profile/profile"
 local lockless_profile = require "./profile/lockless"
+local peek_profile = require "./profile/peek"
 local tx = require "./tx/handle"
 
 type Array<T> = { T }
@@ -17,6 +18,7 @@ type Scheduler = types.Scheduler
 type ProfileBase<T = any> = types.ProfileBase<T>
 type Profile<T = any> = types.Profile<T>
 type LocklessProfile<T = any> = types.LocklessProfile<T>
+type PeekProfile<T = any> = types.PeekProfile<T>
 type HooksList<T... = ()> = types.HooksList<T...>
 
 export type Store<T = any> = {
@@ -48,6 +50,11 @@ export type Store<T = any> = {
 	--- Returns the lockless profile for `key`, creating it if needed. Never
 	--- yields: a lockless profile does no storage work until `fetch`.
 	get_lockless: (self: Store<T>, key: string, user_ids: { number }) -> LocklessProfile<T>,
+
+	--- Read-only snapshot of `key` via `GetAsync`: the current data and lock.
+	--- Yields. The result is not tracked by the store, takes no lock and cannot
+	--- join a transaction.
+	peek: (self: Store<T>, key: string) -> PeekProfile<T>,
 
 	--- Atomically updates profiles of this store (locked or lockless). `transform`
 	--- gets their data in order and returns the new data in the same order, or
@@ -281,6 +288,20 @@ function store.get_lockless(self: Store, key: string, user_ids: { number }): Loc
 
 	self.lockless_profiles[key] = profile
 	return profile
+end
+
+--- One `get_async` on `key`, no write. Never registered in the store: `close`
+--- does not know about it and hooks do not fire for it.
+function store.peek(self: Store, key: string): PeekProfile
+	if self.closed then
+		error "datastore: store is closed"
+	end
+
+	return peek_profile.create {
+		key = key,
+		_config = self.config,
+		_datastore = self.datastore,
+	}
 end
 
 function store.on_change(self: Store, callback: (profile: ProfileBase, new: any, old: any?) -> ())

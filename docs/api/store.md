@@ -78,6 +78,14 @@ The open locked profile for `key`, or `nil`. Never yields.
 
 Returns the [LocklessProfile](./lockless-profile) for `key`, creating it if needed. Never yields: a lockless profile does no storage work until `fetch` or its first flush.
 
+### `store:peek(key)`
+
+```luau
+(self: Store<T>, key: string) -> PeekProfile<T>
+```
+
+Reads `key` once with `GetAsync` and returns a [PeekProfile](./peek-profile): the stored data (template if missing, migrations applied in memory) and the lock currently on the record, if any. Yields. Takes no lock, writes nothing, and the result is not tracked by the store nor accepted by transactions. Works while another server holds the key.
+
 ### `store:transaction(profiles, transform, config?)`
 
 ```luau

@@ -17,6 +17,7 @@ export type TxContext = types.TxContext
 export type Profile<T = any> = types.Profile<T>
 export type LocklessProfile<T = any> = types.LocklessProfile<T>
 export type ProfileBase<T = any> = types.ProfileBase<T>
+export type PeekProfile<T = any> = types.PeekProfile<T>
 
 local dataforge = {}
 

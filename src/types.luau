@@ -319,6 +319,30 @@ export type LocklessProfile<T = any> = ProfileBase<T> & {
 	_queue_update: (self: LocklessProfile<T>, dispatcher: DataDispatcher<T>) -> boolean,
 }
 
+--- Read-only snapshot of a key taken with `get_async`. Not a `ProfileBase`:
+--- it cannot write, hold a lock or join a transaction. Returned by `store:peek`.
+export type PeekProfile<T = any> = {
+	kind: "peek",
+	key: string,
+	_config: ResolvedConfig<T>,
+	_datastore: DatastoreHandle,
+
+	--- Lock currently on the record (session or transaction), nil when free.
+	lock: Lock?,
+	--- Transaction marker on the record, if any. Left as stored, never resolved.
+	pending: Pending<T>?,
+	--- Migration names after the in-memory migrations of the last read.
+	migrations: Array<string>,
+
+	--- Frozen. The template when the key does not exist.
+	_data: T,
+
+	get_data: (self: PeekProfile<T>) -> T,
+	--- Calls `GetAsync` again and replaces `lock`, `pending`, `migrations` and
+	--- the data. Yields.
+	refresh: (self: PeekProfile<T>) -> T,
+}
+
 export type LocklessWriteOptions = {
 	--- Leave this transaction lock on the record with this write (built by the
 	--- transaction from its own config).
