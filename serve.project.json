@@ -1,0 +1,15 @@
+{
+   "name": "datastore-lib",
+   "tree": {
+      "$className": "DataModel",
+      "ReplicatedStorage": {
+         "$className": "ReplicatedStorage",
+         "luau_packages": {
+            "$className": "Folder",
+            "datastore_lib": {
+               "$path": "src/"
+            }
+         }
+      }
+   }
+}

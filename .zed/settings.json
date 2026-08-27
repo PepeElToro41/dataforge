@@ -1,0 +1,50 @@
+{
+  "lsp": {
+    "luau-lsp": {
+      "settings": {
+        "ext": {
+          "definitions": ["./.zune/zune.d.luau"],
+          "documentation": ["./.zune/zune.d.json"],
+          "roblox": {
+            "enabled": true,
+            "security_level": "plugin",
+            "download_api_documentation": true,
+            "download_definitions": true,
+          },
+          "fflags": {
+            "enable_by_default": false,
+            "enable_new_solver": false,
+            "sync": true,
+            "override": {},
+          },
+        },
+        "luau-lsp": {
+	        "sourcemap": {
+	          "enabled": true,
+	          "autogenerate": true,
+	          "rojoProjectFile": "default.project.json",
+	          "includeNonScripts": true,
+	          "sourcemapFile": "sourcemap.json",
+	        },
+          "completion": {
+            "enabled": true,
+            "autocompleteEnd": true,
+            "addParentheses": false,
+            "fillCallArguments": false,
+            "imports": {
+              "enabled": true,
+              "suggestServices": true,
+              "suggestRequires": true,
+              "requireStyle": "Auto",
+              "stringRequires": {
+                "enabled": true,
+              },
+              "separateGroupsWithLine": true,
+              "ignoreGlobs": ["**\\.pesde\\**", "**\\serve\\**"],
+            },
+          },
+        },
+      },
+    },
+  },
+}

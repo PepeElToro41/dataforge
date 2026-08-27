@@ -1,0 +1,12 @@
+{
+   "languageMode": "strict",
+   "lintErrors": true,
+   "typeErrors": true,
+   "aliases": {
+      "dataforge": "./src"
+   },
+   "lint": {
+      "*": true,
+      "LocalShadow": false
+   }
+}
