@@ -4,6 +4,7 @@ export default defineConfig({
 	title: "DataForge",
 	description: "Roblox DataStore library with cross-key transactions, session-locked and lockless profiles, migrations and an immutable data model.",
 	cleanUrls: true,
+	base: process.env.DOCS_BASE ?? "/",
 
 	markdown: {
 		languageAlias: { luau: "lua" },
