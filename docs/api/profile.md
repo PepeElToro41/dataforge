@@ -110,7 +110,6 @@ type ProfileBase<T> = {
 	key: string,
 	config: ResolvedConfig<T>,
 	user_ids: { number },
-	datastore: DatastoreHandle,
 	open: boolean,
 	migrations: { string },
 

@@ -5,8 +5,6 @@ on:
     branches: [main]
     paths:
       - "docs/**"
-      - "package.json"
-      - "package-lock.json"
       - ".github/workflows/docs.yml"
   workflow_dispatch:
 
@@ -31,13 +29,16 @@ jobs:
         with:
           node-version: 22
           cache: npm
+          cache-dependency-path: docs/package-lock.json
 
       - uses: actions/configure-pages@v5
 
       - run: npm ci
+        working-directory: docs
 
       - name: Build docs
-        run: npm run docs:build
+        run: npm run build
+        working-directory: docs
         env:
           # Repo is served at https://<owner>.github.io/<repo>/
           DOCS_BASE: /${{ github.event.repository.name }}/

@@ -28,7 +28,7 @@ export type Store<T = any> = {
 	_hook: types.Hook,
 	_scheduler: types.Scheduler,
 
-	datastore: types.DatastoreHandle,
+	_datastore: types.DatastoreHandle,
 	closed: boolean,
 
 	profiles: { [string]: Profile<T> },
@@ -182,7 +182,7 @@ function store.create<T>(config: Config<T>): Store<T>
 	self.config = resolved
 	self._hook = resolved._hook
 	self._scheduler = resolved._scheduler
-	self.datastore = resolved._hook.get_datastore(resolved.name)
+	self._datastore = resolved._hook.get_datastore(resolved.name)
 
 	self.profiles = {}
 	self.lockless_profiles = {}
@@ -215,7 +215,7 @@ function store.load(self: Store, key: string, user_ids: { number }): Profile
 		key = key,
 		config = self.config,
 		user_ids = user_ids,
-		datastore = self.datastore,
+		_datastore = self._datastore,
 	})
 	self._loading[key] = nil
 
@@ -276,7 +276,7 @@ function store.get_lockless(self: Store, key: string, user_ids: { number }): Loc
 		key = key,
 		config = self.config,
 		user_ids = user_ids,
-		datastore = self.datastore,
+		_datastore = self._datastore,
 	}
 
 	profile:on_closed(function()
@@ -300,7 +300,7 @@ function store.peek(self: Store, key: string): PeekProfile
 	return peek_profile.create {
 		key = key,
 		_config = self.config,
-		_datastore = self.datastore,
+		_datastore = self._datastore,
 	}
 end
 

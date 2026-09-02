@@ -42,7 +42,7 @@ TEST("store", function()
 		CHECK(config.flush_interval == 30)
 		CHECK(config.retry_attempts == 5 and config.retry_base == 1)
 		CHECK(#config.migrations == 0)
-		CHECK(store.datastore.name == helpers.STORE)
+		CHECK(store._datastore.name == helpers.STORE)
 
 		local custom = helpers.make_store(hook, scheduler, { lock_ttl = 20, autosave_interval = 5 })
 		CHECK(custom.config.load_timeout == 30)

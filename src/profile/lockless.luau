@@ -139,7 +139,7 @@ type WriteOptions = types.LocklessWriteOptions
 local function write_queued(self: LocklessProfile, options: WriteOptions)
 	local config = self.config
 	local scheduler = config._scheduler
-	local datastore = self.datastore
+	local datastore = self._datastore
 	local queue = self.queued_updates
 	local old_tx_lock = options.old_tx_lock
 	local new_lock = options.tx_lock
@@ -378,7 +378,7 @@ end
 --- (keeping the queue) if any session lock is on the record. Caller holds the mutex.
 local function read_record(self: LocklessProfile)
 	local config = self.config
-	local datastore = self.datastore
+	local datastore = self._datastore
 
 	local record = utils.retry(config, function()
 		return datastore.get_async(self.key)
@@ -463,7 +463,7 @@ function lockless_profile.create(options: LoadOptions): LocklessProfile
 	self.kind = "lockless"
 	self.key = options.key
 	self.user_ids = options.user_ids
-	self.datastore = options.datastore
+	self._datastore = options._datastore
 	self.open = true
 
 	self.config = options.config

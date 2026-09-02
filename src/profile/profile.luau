@@ -16,7 +16,7 @@ profile.__index = profile
 local function adquire_lock(load_options: LoadOptions): types.DataRecord
 	local config = load_options.config
 	local user_ids = load_options.user_ids
-	local datastore = load_options.datastore
+	local datastore = load_options._datastore
 	local job_id = config._hook.job_id()
 	local key = load_options.key
 
@@ -130,7 +130,7 @@ type WriteOptions = {
 local function write_data_record(self: Profile, options: WriteOptions): boolean
 	local config = self.config
 	local scheduler = config._scheduler
-	local datastore = self.datastore
+	local datastore = self._datastore
 	local now = scheduler.now()
 	local job_id = config._hook.job_id()
 
@@ -206,7 +206,7 @@ local function release_lock(load_options: LoadOptions)
 
 	local ok, err = utils.try(function()
 		utils.retry(config, function()
-			return load_options.datastore.update_async(load_options.key, function(old: DataRecord?): DataRecord?
+			return load_options._datastore.update_async(load_options.key, function(old: DataRecord?): DataRecord?
 				if not common.is_lock_owned(old, job_id) then
 					return nil
 				end
@@ -289,7 +289,7 @@ end
 local function load_options_of(self: Profile): LoadOptions
 	return {
 		key = self.key,
-		datastore = self.datastore,
+		_datastore = self._datastore,
 		config = self.config,
 		user_ids = self.user_ids,
 	}
@@ -309,7 +309,7 @@ function profile.load(load_options: LoadOptions): Profile
 	self.kind = "locked"
 	self.key = load_options.key
 	self.user_ids = load_options.user_ids
-	self.datastore = load_options.datastore
+	self._datastore = load_options._datastore
 	self.open = true
 	self.is_locked = true
 

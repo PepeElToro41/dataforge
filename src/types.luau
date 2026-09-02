@@ -217,7 +217,7 @@ export type ProfileBase<T = any> = {
 	key: string,
 	config: ResolvedConfig<T>,
 	user_ids: Array<number>,
-	datastore: DatastoreHandle,
+	_datastore: DatastoreHandle,
 	open: boolean,
 	migrations: Array<string>,
 
@@ -359,7 +359,7 @@ export type LocklessWriteOptions = {
 --- What a store hands to `profile.load` / `lockless_profile.create`.
 export type LoadOptions = {
 	key: string,
-	datastore: DatastoreHandle,
+	_datastore: DatastoreHandle,
 	config: ResolvedConfig,
 	user_ids: Array<number>,
 }
