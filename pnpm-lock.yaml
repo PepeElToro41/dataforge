@@ -1,0 +1,22 @@
+lockfileVersion: '9.0'
+
+settings:
+  autoInstallPeers: true
+  excludeLinksFromLockfile: false
+
+importers:
+
+  .:
+    devDependencies:
+      '@rbxts/types':
+        specifier: ^1.0.947
+        version: 1.0.947
+
+packages:
+
+  '@rbxts/types@1.0.947':
+    resolution: {integrity: sha512-NAGa6dAvP6kD3mNNZUnwTDenzqgbK7kbCp1ZXgTuKN+sH0AoO5M32TAFfdGbOCMkSysl3YhHc+B0PA6oGMCkAA==}
+
+snapshots:
+
+  '@rbxts/types@1.0.947': {}

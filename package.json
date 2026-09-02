@@ -1,0 +1,32 @@
+{
+  "name": "@rbxts/dataforge",
+  "version": "0.1.0",
+  "description": "Roblox DataStore library with cross-key transactions, session-locked and lockless profiles, migrations and an immutable data model.",
+  "license": "MIT",
+  "author": "PepeElToro41",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/PepeElToro41/dataforge.git"
+  },
+  "homepage": "https://pepeeltoro41.github.io/dataforge/",
+  "keywords": [
+    "roblox",
+    "roblox-ts",
+    "datastore",
+    "luau"
+  ],
+  "main": "src/init.luau",
+  "types": "index.d.ts",
+  "files": [
+    "src",
+    "index.d.ts",
+    "default.project.json",
+    "README.md"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "devDependencies": {
+    "@rbxts/types": "^1.0.947"
+  }
+}
