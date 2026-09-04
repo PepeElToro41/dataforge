@@ -46,8 +46,8 @@ Narrow on `type`. The `profile` and `store` fields hold the object the error is 
 | `roblox` | `op: "get_async" \| "update_async"`, `store: string`, `key: string`, `cause: any` | Storage kept failing after `retry_attempts`; `cause` is the last error the hook threw. |
 | `timeout` | `key: string`, `lock: Lock?` | `load` / `readquire` gave up after `load_timeout`. `lock` is the last lock seen on the record (its holder). |
 | `lock_lost` | `profile`, `lock: Lock?` | A write found the session lock is not ours: the profile is closed and nothing was written. `lock` is what the record holds now (`nil` when it was wiped). |
-| `not_locked` | `profile` | The profile was `release`d and not `readquire`d. |
-| `profile_locked` | `profile`, `lock: Lock` | Lockless: another server holds a live session lock on the key. The profile is closed. |
+| `released` | `profile` | The profile was `release`d and not `readquire`d. |
+| `lockless_locked` | `profile`, `lock: Lock` | Lockless: another server holds a live session lock on the key. The profile is closed. |
 | `tx_lock_lost` | `profile`, `expected: Lock`, `lock: Lock?` | Lockless, inside a transaction: the transaction lock this profile held (`expected`) is gone or replaced (`lock`). The profile is closed. |
 | `outdated` | `profile`, `record_migrations: { string }`, `declared_migrations: { string }` | Lockless: the record was written by a newer server (more migrations than this store declares). Nothing written, queue kept. |
 | `not_fetched` | `profile` | Lockless `get_data` before any `fetch` / flush. Thrown, never returned. |
@@ -64,14 +64,14 @@ Narrow on `type`. The `profile` and `store` fields hold the object the error is 
 | --- | --- | --- |
 | `store:load`, `store:wait_loaded` | `Result<Profile>` | `store_closed`, `already_loaded`, `timeout`, `roblox`, `migration_mismatch`, `tx_marker_invalid` |
 | `store:peek`, `peek:refresh` | `Result<PeekProfile>` / `Result<T>` | `store_closed`, `roblox`, `migration_mismatch` |
-| `store:transaction`, `dataforge.transaction` | `Result<boolean>` | `store_closed`, `profile_closed`, `not_locked`, `tx_aborted`, and whatever flushing a lockless participant raised (`profile_locked`, `outdated`, `roblox`, `migration_mismatch`) |
-| `profile:update` | `Result<boolean>` | `profile_closed`, `not_locked` |
-| `profile:save` | `Result<nil>` | `profile_closed`, `not_locked`, `roblox`, `lock_lost` |
+| `store:transaction`, `dataforge.transaction` | `Result<boolean>` | `store_closed`, `profile_closed`, `released`, `tx_aborted`, and whatever flushing a lockless participant raised (`lockless_locked`, `outdated`, `roblox`, `migration_mismatch`) |
+| `profile:update` | `Result<boolean>` | `profile_closed`, `released` |
+| `profile:save` | `Result<nil>` | `profile_closed`, `released`, `roblox`, `lock_lost` |
 | `profile:release` | `Result<nil>` | `profile_closed`, `roblox`, `lock_lost` |
 | `profile:readquire` | `Result<nil>` | `profile_closed`, `timeout`, `roblox`, `migration_mismatch`, `tx_marker_invalid` |
-| `lockless:fetch` | `Result<T>` | `profile_closed`, `profile_locked`, `roblox`, `migration_mismatch`, `tx_marker_invalid` |
+| `lockless:fetch` | `Result<T>` | `profile_closed`, `lockless_locked`, `roblox`, `migration_mismatch`, `tx_marker_invalid` |
 | `lockless:update` | `Result<boolean>` | `profile_closed` |
-| `lockless:save` | `Result<nil>` | `profile_closed`, `profile_locked`, `outdated`, `roblox`, `migration_mismatch` |
+| `lockless:save` | `Result<nil>` | `profile_closed`, `lockless_locked`, `outdated`, `roblox`, `migration_mismatch` |
 
 Thrown as error tables instead of returned (plain accessors): `profile:get_data()` (`profile_closed`, `not_fetched`) and `store:get_lockless` (`store_closed`).
 

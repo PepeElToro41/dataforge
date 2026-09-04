@@ -17,7 +17,7 @@ local data = guild:fetch():unwrap() -- GetAsync; returns the stored data
 local same = guild:get_data()       -- cached copy; throws `not_fetched` until the profile is fetched
 ```
 
-`fetch` prepares and get the current data. It fails with `profile_locked` (the error carries the lock) if another server holds a **session** lock (a locked profile owns it) and fires `on_lock_lost`. It waits if the key only holds a short **transaction** lock. This uses GetAsync so its cheaper.
+`fetch` prepares and get the current data. It fails with `lockless_locked` (the error carries the lock) if another server holds a **session** lock (a locked profile owns it) and fires `on_lock_lost`. It waits if the key only holds a short **transaction** lock. This uses GetAsync so its cheaper.
 
 Calling this method is optional, and store can be used without it, but no data will be retrieved until the queued updates flushes (if theres any) 
 
@@ -63,7 +63,7 @@ Flushes happen:
 
 When the profile is already fetched, `update` advances the local data immediately so `get_data()` reflects the queued change. A transform returning `false` or `nil` is not queued.
 
-A flush can fail without losing the queue: `save` returns `Err(profile_locked)` when a session lock showed up (the profile closes), `Err(outdated)` when a newer server already wrote the record, or `Err(roblox)` when storage kept failing. See [Errors](../api/errors).
+A flush can fail without losing the queue: `save` returns `Err(lockless_locked)` when a session lock showed up (the profile closes), `Err(outdated)` when a newer server already wrote the record, or `Err(roblox)` when storage kept failing. See [Errors](../api/errors).
 
 
 ## In transactions

@@ -242,6 +242,15 @@ function store.load(self: Store, key: string, user_ids: { number }): Result<Prof
 		error(loaded, 0)
 	end
 
+	if self.closed then
+		-- the store closed while this load was in flight: give the lock back
+		-- right away instead of registering a profile nobody will unload
+		loaded:unload()
+		local failure = result.err(errors.store_closed(self))
+		resume_load_locks(self, key, failure)
+		return failure
+	end
+
 	loaded:on_closed(function()
 		unregister_profile(self, loaded)
 	end)
@@ -372,7 +381,9 @@ function store.transaction(
 end
 
 --- Unloads every profile (locked and lockless) concurrently and waits for all
---- of them. Loads and transactions are rejected from the first line on.
+--- of them, and for any load still in flight (which fails with `store_closed`
+--- and releases its lock). Loads and transactions are rejected from the first
+--- line on.
 function store.close(self: Store)
 	if self.closed then
 		return
@@ -398,11 +409,28 @@ function store.close(self: Store)
 		end)
 	end
 
+	--- A load still in flight: `load` sees `closed` when it finishes and gives
+	--- the lock back itself; wait for that like for an unload.
+	local function wait_load(key: string)
+		remaining += 1
+		scheduler.spawn(function()
+			insert_loaded_lock(self, key)
+			coroutine.yield()
+			remaining -= 1
+			if remaining == 0 and waiting then
+				scheduler.spawn(thread)
+			end
+		end)
+	end
+
 	for _, profile in self.profiles do
 		unload(profile)
 	end
 	for _, profile in self.lockless_profiles do
 		unload(profile)
+	end
+	for key in self._loading do
+		wait_load(key)
 	end
 
 	if remaining > 0 then

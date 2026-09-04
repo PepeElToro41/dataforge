@@ -32,7 +32,7 @@ Current data, deep-frozen. Never mutate it. Throws a `profile_closed` error tabl
 (self: Profile<T>, fn: (T) -> T | false) -> Result<boolean>
 ```
 
-Calls `fn` with the current data. Returning a new value replaces the data (fires `on_change`, marks dirty); returning `false` or `nil` leaves it untouched. `Ok(true)` when the data changed, `Ok(false)` otherwise. Fails with `profile_closed` or `not_locked` (released). An error thrown by `fn` propagates as is.
+Calls `fn` with the current data. Returning a new value replaces the data (fires `on_change`, marks dirty); returning `false` or `nil` leaves it untouched. `Ok(true)` when the data changed, `Ok(false)` otherwise. Fails with `profile_closed` or `released` (released). An error thrown by `fn` propagates as is.
 
 ### `profile:save()`
 
@@ -40,7 +40,7 @@ Calls `fn` with the current data. Returning a new value replaces the data (fires
 (self: Profile<T>) -> Result<nil>
 ```
 
-Writes the data now (fires `on_save` first) and refreshes the lock. Yields. Fails with `profile_closed`, `not_locked`, `roblox` (storage kept failing after retries) or `lock_lost` (another server took the key: the profile is closed, nothing was written).
+Writes the data now (fires `on_save` first) and refreshes the lock. Yields. Fails with `profile_closed`, `released`, `roblox` (storage kept failing after retries) or `lock_lost` (another server took the key: the profile is closed, nothing was written).
 
 ### `profile:release()`
 
@@ -48,7 +48,7 @@ Writes the data now (fires `on_save` first) and refreshes the lock. Yields. Fail
 (self: Profile<T>) -> Result<nil>
 ```
 
-Writes the data and gives the session lock back, keeping the profile open so another server may take the key. Afterwards `is_locked` is `false`; `update` / `save` fail with `not_locked`, no autosave runs, the profile cannot join a transaction and `unload` writes nothing. No-op when already released. Fails with `profile_closed`, `roblox` (the lock is still ours, `is_locked` stays `true`) or `lock_lost` (the profile is closed).
+Writes the data and gives the session lock back, keeping the profile open so another server may take the key. Afterwards `is_locked` is `false`; `update` / `save` fail with `released`, no autosave runs, the profile cannot join a transaction and `unload` writes nothing. No-op when already released. Fails with `profile_closed`, `roblox` (the lock is still ours, `is_locked` stays `true`) or `lock_lost` (the profile is closed).
 
 ### `profile:readquire()`
 

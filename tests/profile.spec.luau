@@ -531,7 +531,7 @@ TEST("session-locked profile", function()
 			helpers.run(scheduler, function()
 				return profile:update(helpers.set(1))
 			end),
-			"not_locked"
+			"released"
 		)
 		CHECK(err.profile == profile)
 		CHECK(string.find(tostring(err), "does not hold", 1, true) ~= nil)
@@ -539,7 +539,7 @@ TEST("session-locked profile", function()
 			helpers.run(scheduler, function()
 				return profile:save()
 			end),
-			"not_locked"
+			"released"
 		)
 		CHECK(profile.open)
 
@@ -684,7 +684,7 @@ TEST("session-locked profile", function()
 					return { { coins = 1 }, { coins = 2 } }
 				end)
 			end),
-			"not_locked"
+			"released"
 		)
 		CHECK(err.profile == a)
 		CHECK(a.open and b.open)

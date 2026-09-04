@@ -30,7 +30,7 @@ end
 --- Atomically updates any set of profiles, across stores and mixing locked and
 --- lockless ones. Ok(false) when `process` returns false, Ok(true) when
 --- committed. Fails with `tx_aborted` (see its `cause`), `profile_closed`,
---- `not_locked`, or what flushing a lockless participant raised.
+--- `released`, or what flushing a lockless participant raised.
 function dataforge.transaction(
 	profiles: Array<ProfileBase>,
 	process: (ctx: TxContext) -> boolean?,

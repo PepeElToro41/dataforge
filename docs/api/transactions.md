@@ -17,8 +17,8 @@ function dataforge.transaction(
 | `Ok(true)` | Committed: every changed participant holds its new data. |
 | `Ok(false)` | `process` returned `false`; nothing was written. |
 | `Err(tx_aborted)` | Aborted during phase 1: `cause` is the participant's error (`lock_lost`, `tx_lock_lost`, `roblox`, ...), or `nil` when another server already resolved the marker as aborted. |
-| `Err(profile_closed)`, `Err(not_locked)` | A participant is closed or released. |
-| `Err(profile_locked)`, `Err(outdated)`, `Err(roblox)`, `Err(migration_mismatch)` | Flushing a lockless participant before the snapshot failed. |
+| `Err(profile_closed)`, `Err(released)` | A participant is closed or released. |
+| `Err(lockless_locked)`, `Err(outdated)`, `Err(roblox)`, `Err(migration_mismatch)` | Flushing a lockless participant before the snapshot failed. |
 
 Misuse (non-profiles, duplicates, no profiles, mixed hooks, `ctx:set(profile, nil)`) and errors thrown by `process` throw. See [Errors](./errors).
 

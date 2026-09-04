@@ -174,14 +174,14 @@ export type LockLostError = {
 	lock: Lock?,
 }
 
-export type NotLockedError = {
-	type: "not_locked",
+export type ReleasedError = {
+	type: "released",
 	message: string,
 	profile: any,
 }
 
-export type ProfileLockedError = {
-	type: "profile_locked",
+export type LocklessLockedError = {
+	type: "lockless_locked",
 	message: string,
 	profile: any,
 	--- the live session lock another server holds on the record
@@ -265,8 +265,8 @@ export type Error =
 	| RobloxError
 	| TimeoutError
 	| LockLostError
-	| NotLockedError
-	| ProfileLockedError
+	| ReleasedError
+	| LocklessLockedError
 	| TxLockLostError
 	| OutdatedError
 	| NotFetchedError
@@ -330,7 +330,7 @@ export type TxPatch = {
 	prepared: boolean,
 
 	--- Phase 1: persist `pending` next to the current data. Throws an `Error`
-	--- (`lock_lost`, `tx_lock_lost`, `profile_locked`, `roblox`, ...) on failure.
+	--- (`lock_lost`, `tx_lock_lost`, `lockless_locked`, `roblox`, ...) on failure.
 	prepare: (pending: Pending) -> (),
 	--- Applies the outcome in memory. Called exactly once by the operation.
 	commit: (operation: TxOperation) -> (),

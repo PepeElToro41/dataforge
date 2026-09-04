@@ -174,6 +174,30 @@ TEST("lockless profile", function()
 		CHECK(g2:get_data().coins == 60)
 	end)
 
+	CASE("a closing hook that unloads the profile itself does not make unload throw", function()
+		local store = helpers.make_store(hook, scheduler)
+		local g = store:get_lockless("g", {})
+		local closed = 0
+		local reentered = false
+		g:on_closing(function()
+			if reentered then
+				return
+			end
+			reentered = true
+			g:update(add(2)):unwrap()
+			g:unload()
+		end)
+		g:on_closed(function()
+			closed += 1
+		end)
+		helpers.sync(scheduler, function()
+			g:unload()
+		end)
+		CHECK(not g.open and closed == 1)
+		CHECK(helpers.record(hook, "g").data.coins == 2)
+		CHECK(#hook.warnings == 0)
+	end)
+
 	CASE("unload flushes only when something is queued, then rejects everything", function()
 		local store = helpers.make_store(hook, scheduler)
 		local idle = store:get_lockless("idle", {})
@@ -244,7 +268,7 @@ TEST("lockless profile", function()
 			helpers.run(scheduler, function()
 				return g:fetch()
 			end),
-			"profile_locked"
+			"lockless_locked"
 		)
 		CHECK(err.profile == g and err.lock.id == "other-server" and err.lock.expires == 60)
 		CHECK(string.find(tostring(err), "session locked", 1, true) ~= nil)
@@ -272,7 +296,7 @@ TEST("lockless profile", function()
 			helpers.run(scheduler, function()
 				return g:save()
 			end),
-			"profile_locked"
+			"lockless_locked"
 		)
 		CHECK(err.profile == g and err.lock.id == "other-server")
 		CHECK(lost == 1 and not g.open)
@@ -348,7 +372,7 @@ TEST("lockless profile", function()
 			helpers.run(scheduler, function()
 				return g:fetch()
 			end),
-			"profile_locked"
+			"lockless_locked"
 		)
 		CHECK(err.lock.id == locked_store._hook.job_id())
 		CHECK(not g.open)

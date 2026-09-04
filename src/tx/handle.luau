@@ -195,7 +195,7 @@ local function assert_open_profiles(profiles: Array<ProfileBase>)
 			error(errors.closed(participant), 0)
 		end
 		if participant.kind == "locked" and not (participant :: Profile).is_locked then
-			error(errors.not_locked(participant), 0)
+			error(errors.released(participant), 0)
 		end
 	end
 end
@@ -298,8 +298,8 @@ end
 --- Runs `process(ctx)` over the given profiles (any store, locked or lockless)
 --- and commits every `ctx:set` atomically. Ok(false) when `process` returns
 --- false, Ok(true) when committed. Fails with `tx_aborted` (its `cause` says
---- why phase 1 gave up), `profile_closed`, `not_locked`, or what flushing a
---- lockless participant raised (`profile_locked`, `outdated`, `roblox`, ...).
+--- why phase 1 gave up), `profile_closed`, `released`, or what flushing a
+--- lockless participant raised (`lockless_locked`, `outdated`, `roblox`, ...).
 --- Argument misuse throws; an error thrown by `process` propagates as is.
 function tx_handle.run(
 	config: ResolvedTransactionConfig,
@@ -323,7 +323,7 @@ function tx_handle.run(
 			return result.err(errors.closed(profile))
 		end
 		if profile.kind == "locked" and not (profile :: Profile).is_locked then
-			return result.err(errors.not_locked(profile))
+			return result.err(errors.released(profile))
 		end
 
 		seen[profile] = true

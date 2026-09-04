@@ -98,4 +98,4 @@ What every fallible call returns. See [Errors](./errors).
 
 ### `Error` ★
 
-Union of every error table (`RobloxError`, `TimeoutError`, `LockLostError`, `NotLockedError`, `ProfileLockedError`, `TxLockLostError`, `OutdatedError`, `NotFetchedError`, `ProfileClosedError`, `MigrationMismatchError`, `TxAbortedError`, `TxMarkerInvalidError`, `StoreClosedError`, `AlreadyLoadedError`), each with a literal `type`. See [Errors](./errors).
+Union of every error table (`RobloxError`, `TimeoutError`, `LockLostError`, `ReleasedError`, `LocklessLockedError`, `TxLockLostError`, `OutdatedError`, `NotFetchedError`, `ProfileClosedError`, `MigrationMismatchError`, `TxAbortedError`, `TxMarkerInvalidError`, `StoreClosedError`, `AlreadyLoadedError`), each with a literal `type`. See [Errors](./errors).

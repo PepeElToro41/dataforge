@@ -28,7 +28,7 @@ end
 ```
 
 - `Ok(true)` when committed, `Ok(false)` when the callback cancelled.
-- `Err(tx_aborted)` when the transaction was **aborted**: its `cause` is the failing participant's error (`lock_lost` with the thief's lock, `tx_lock_lost`, `roblox`, ...), or `nil` when another server resolved the marker as aborted first. Closed or released participants give `Err(profile_closed)` / `Err(not_locked)`. See [Errors](../api/errors).
+- `Err(tx_aborted)` when the transaction was **aborted**: its `cause` is the failing participant's error (`lock_lost` with the thief's lock, `tx_lock_lost`, `roblox`, ...), or `nil` when another server resolved the marker as aborted first. Closed or released participants give `Err(profile_closed)` / `Err(released)`. See [Errors](../api/errors).
 - Misuse and errors thrown by the callback still throw.
 - A transaction that changes only one profile is a plain write, no marker involved.
 

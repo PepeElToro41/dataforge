@@ -234,14 +234,14 @@ declare namespace dataforge {
 	}
 
 	/** The profile was released and not readquired. */
-	interface NotLockedError extends ErrorBase {
-		readonly type: "not_locked";
+	interface ReleasedError extends ErrorBase {
+		readonly type: "released";
 		readonly profile: Profile<any>;
 	}
 
 	/** Another server holds a live session lock on a lockless key; the profile is closed. */
-	interface ProfileLockedError extends ErrorBase {
-		readonly type: "profile_locked";
+	interface LocklessLockedError extends ErrorBase {
+		readonly type: "lockless_locked";
 		readonly profile: LocklessProfile<any>;
 		readonly lock: Lock;
 	}
@@ -324,8 +324,8 @@ declare namespace dataforge {
 		| RobloxError
 		| TimeoutError
 		| LockLostError
-		| NotLockedError
-		| ProfileLockedError
+		| ReleasedError
+		| LocklessLockedError
 		| TxLockLostError
 		| OutdatedError
 		| NotFetchedError
@@ -380,14 +380,14 @@ declare namespace dataforge {
 		 * (`profile_closed`, or `not_fetched` for a lockless profile).
 		 */
 		get_data(): T;
-		/** Fails with `profile_closed`, `not_locked`, `roblox`, `lock_lost` (locked) or `profile_locked`, `outdated`, ... (lockless). */
+		/** Fails with `profile_closed`, `released`, `roblox`, `lock_lost` (locked) or `lockless_locked`, `outdated`, ... (lockless). */
 		save(): Result<void>;
 		unload(): void;
 		/**
 		 * Applies `dispatcher` to the current data. Returning `undefined` or
 		 * `false` leaves the data untouched (`Ok(false)`); anything else
 		 * becomes the new data and is persisted on the next save (`Ok(true)`).
-		 * Fails with `profile_closed` / `not_locked`; an error thrown by the
+		 * Fails with `profile_closed` / `released`; an error thrown by the
 		 * dispatcher propagates as is.
 		 */
 		update(dispatcher: DataDispatcher<T>): Result<boolean>;
@@ -420,7 +420,7 @@ declare namespace dataforge {
 		/**
 		 * Whether the profile currently holds its session lock. True after
 		 * `load`; `release` clears it, `readquire` takes it again. While
-		 * released, `update` / `save` fail with `not_locked` and the profile
+		 * released, `update` / `save` fail with `released` and the profile
 		 * cannot join a transaction.
 		 */
 		readonly is_locked: boolean;
@@ -453,7 +453,7 @@ declare namespace dataforge {
 		/**
 		 * Reads the stored record into the local data: migrations are applied,
 		 * then the queued updates replayed on top. Marks the profile fetched.
-		 * Yields. Fails (keeping the queue) with `profile_locked` if a session
+		 * Yields. Fails (keeping the queue) with `lockless_locked` if a session
 		 * lock is on the record, `roblox`, `migration_mismatch`, `profile_closed`.
 		 */
 		fetch(): Result<T>;
@@ -573,7 +573,7 @@ declare namespace dataforge {
 	 * writes with `ctx.set(profile, newData)`; return `false` to cancel.
 	 *
 	 * `Ok(false)` when cancelled, `Ok(true)` when committed. Fails with
-	 * `tx_aborted` (see its `cause`), `profile_closed`, `not_locked`, or what
+	 * `tx_aborted` (see its `cause`), `profile_closed`, `released`, or what
 	 * flushing a lockless participant raised. Misuse and errors thrown by
 	 * `process` throw. `config` defaults its retry settings to the first
 	 * profile's.

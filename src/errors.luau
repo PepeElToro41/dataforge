@@ -57,18 +57,18 @@ function errors.lock_lost(profile: any, lock: Lock?): types.LockLostError
 	}
 end
 
-function errors.not_locked(profile: any): types.NotLockedError
+function errors.released(profile: any): types.ReleasedError
 	return make {
-		type = "not_locked" :: "not_locked",
-		message = `datastore: profile "{profile.key}" does not hold its session lock`,
+		type = "released" :: "released",
+		message = `datastore: profile "{profile.key}" is released (does not hold its session lock)`,
 		profile = profile,
 	}
 end
 
-function errors.profile_locked(profile: any, lock: Lock): types.ProfileLockedError
+function errors.lockless_locked(profile: any, lock: Lock): types.LocklessLockedError
 	return make {
-		type = "profile_locked" :: "profile_locked",
-		message = `datastore: "{profile.key}" is session locked`,
+		type = "lockless_locked" :: "lockless_locked",
+		message = `datastore: lockless profile "{profile.key}" is session locked by another server`,
 		profile = profile,
 		lock = lock,
 	}

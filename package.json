@@ -1,6 +1,6 @@
 {
   "name": "@rbxts/dataforge",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Roblox DataStore library with cross-key transactions, session-locked and lockless profiles, migrations and an immutable data model.",
   "license": "MIT",
   "author": "PepeElToro41",

@@ -315,7 +315,7 @@ end
 
 local function assert_locked(self: Profile)
 	if not self.is_locked then
-		error(errors.not_locked(self), 0)
+		error(errors.released(self), 0)
 	end
 end
 
@@ -363,7 +363,7 @@ end
 --- Applies `dispatcher` to the current data. Returning nil or false leaves the
 --- data untouched (Ok(false)); anything else becomes the new data and is
 --- persisted on the next save (Ok(true)). Waits for any in-flight save on the
---- mutex. Fails with `profile_closed` / `not_locked`; an error thrown by the
+--- mutex. Fails with `profile_closed` / `released`; an error thrown by the
 --- dispatcher propagates as is.
 function profile.update(self: Profile, dispatcher: (any) -> any): types.Result<boolean>
 	return result.capture(function()
@@ -405,7 +405,7 @@ function profile.on_lock_lost(self: Profile, callback: () -> ())
 end
 
 --- Writes the data, refreshing the session lock. Fails with `profile_closed`,
---- `not_locked`, `roblox`, or `lock_lost` (another server took the key; the
+--- `released`, `roblox`, or `lock_lost` (another server took the key; the
 --- profile is closed).
 function profile.save(self: Profile): types.Result<nil>
 	return result.capture(function()
@@ -429,7 +429,7 @@ end
 
 --- Writes the data and gives the session lock back. The profile stays open
 --- (another server may load the key meanwhile); `update` and `save` fail with
---- `not_locked` until `readquire`. No-op when already released. Fails with
+--- `released` until `readquire`. No-op when already released. Fails with
 --- `profile_closed`, `roblox` (the lock stays on the record, `is_locked`
 --- stays true) or `lock_lost` (the profile is closed).
 function profile.release(self: Profile): types.Result<nil>

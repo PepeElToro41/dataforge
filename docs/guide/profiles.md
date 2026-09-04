@@ -37,7 +37,7 @@ profile:readquire() -- take the lock again, adopt whatever is stored
 profile.is_locked   -- true
 ```
 
-While released, `update` and `save` fail with `not_locked`, no autosave runs, the profile cannot join a transaction and `unload` writes nothing. `readquire` waits like `load` (failing with `timeout` the same way) and replaces the local data with the stored record (firing `on_change`).
+While released, `update` and `save` fail with `released`, no autosave runs, the profile cannot join a transaction and `unload` writes nothing. `readquire` waits like `load` (failing with `timeout` the same way) and replaces the local data with the stored record (firing `on_change`).
 
 ## Events
 

@@ -144,7 +144,7 @@ type WriteOptions = types.LocklessWriteOptions
 --- the stored lock has the same id. If the lock is gone or belongs to someone
 --- else, nothing is written and the call fails with `tx_lock_lost`.
 ---
---- Throws `profile_locked` (a live session lock; the profile is closed),
+--- Throws `lockless_locked` (a live session lock; the profile is closed),
 --- `tx_lock_lost` (closed too), `outdated`, `migration_mismatch`, `roblox`,
 --- or whatever a queued dispatcher / migration threw.
 local function write_queued(self: LocklessProfile, options: WriteOptions)
@@ -260,7 +260,7 @@ local function write_queued(self: LocklessProfile, options: WriteOptions)
 		if state.session_locked then
 			self._tx_lock = nil
 			process_lock_lost(self)
-			error(errors.profile_locked(self, state.lock :: types.Lock), 0)
+			error(errors.lockless_locked(self, state.lock :: types.Lock), 0)
 		end
 
 		if state.tx_lock_lost then
@@ -335,7 +335,7 @@ end
 
 --- Applies every queued update to the stored data in one update_async and
 --- refreshes the local data with the result. Marks the profile fetched.
---- Fails (keeping the queue) with `profile_locked` if another server holds a
+--- Fails (keeping the queue) with `lockless_locked` if another server holds a
 --- live session lock (the profile is closed), `outdated` if the record was
 --- already written by a newer server, `migration_mismatch`, `roblox` or
 --- `profile_closed`. An error thrown by a queued dispatcher propagates as is.
@@ -358,6 +358,10 @@ function lockless_profile.unload(self: LocklessProfile)
 	end
 	-- last chance to queue updates while the profile is still open
 	fire_hooks(self, "closing", self._hooks.closing)
+	-- a closing hook may have unloaded the profile itself
+	if not self.open then
+		return
+	end
 
 	self.open = false
 	self._mutex:lock()
@@ -419,7 +423,7 @@ local function read_record(self: LocklessProfile)
 	local lock = if record then record.lock else nil
 	if lock and not lock.tx and lock.expires > config._scheduler.now() then
 		process_lock_lost(self)
-		error(errors.profile_locked(self, lock), 0)
+		error(errors.lockless_locked(self, lock), 0)
 	end
 	-- an expired session lock belongs to a dead server: ignored, the next write clears it
 	-- a transaction lock does not matter for a read: the data under it is the
@@ -446,7 +450,7 @@ local function read_record(self: LocklessProfile)
 	return self._data
 end
 
---- Fails with `profile_locked` (a session lock is on the record; the profile
+--- Fails with `lockless_locked` (a session lock is on the record; the profile
 --- is closed), `migration_mismatch`, `roblox`, `tx_marker_invalid` or
 --- `profile_closed`. An error thrown by a queued dispatcher propagates as is.
 function lockless_profile.fetch(self: LocklessProfile): types.Result<any>

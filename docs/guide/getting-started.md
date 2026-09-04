@@ -6,7 +6,7 @@ Install with [Wally](https://wally.run). Add the dependency to your `wally.toml`
 
 ```toml
 [server-dependencies]
-dataforge = "pepeeltoro41/dataforge@0.1.0"
+dataforge = "pepeeltoro41/dataforge@0.2.0"
 ```
 
 Then run:

@@ -31,7 +31,7 @@ function dataforge.transaction(
 Atomically updates any set of profiles, across stores and mixing locked and lockless ones. `process` reads with `ctx:get(profile)` and stages writes with `ctx:set(profile, new)`; return `false` to cancel (nothing is written).
 
 - `Ok(false)` when cancelled, `Ok(true)` when committed.
-- Fails with `tx_aborted` (its `cause` says which participant failed and why), `profile_closed`, `not_locked`, or what flushing a lockless participant raised. See [Errors](./errors).
+- Fails with `tx_aborted` (its `cause` says which participant failed and why), `profile_closed`, `released`, or what flushing a lockless participant raised. See [Errors](./errors).
 - Throws on misuse (non-profiles, duplicates, no profiles, mixed hooks, `ctx:set(profile, nil)`) and when `process` throws.
 - `config` defaults its retry settings to the first profile's.
 
