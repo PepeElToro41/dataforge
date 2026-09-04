@@ -24,10 +24,13 @@ local hook: helpers.Hook
 	waiter before the holder returns, so completion order is not meaningful.
 ]]
 
-local function all_done(handles: { [string]: helpers.Handle })
+--- Asserts every handle finished successfully; returns what each produced by name.
+local function all_done(handles: { [string]: helpers.Handle }): { [string]: any }
+	local values = {}
 	for name, handle in handles do
-		helpers.finished(handle, name)
+		values[name] = helpers.finished(handle, name)
 	end
+	return values
 end
 
 local function none_done(handles: { [string]: helpers.Handle })
@@ -65,13 +68,13 @@ TEST("pending chaining", function()
 				return profile:update(helpers.set(1))
 			end),
 			save1 = run(function()
-				profile:save()
+				profile:save():unwrap()
 			end),
 			update2 = run(function()
 				return profile:update(helpers.set(2))
 			end),
 			save2 = run(function()
-				profile:save()
+				profile:save():unwrap()
 			end),
 			unload = run(function()
 				profile:unload()
@@ -109,7 +112,7 @@ TEST("pending chaining", function()
 				return profile:update(helpers.set(7))
 			end),
 			save = run(function()
-				profile:save()
+				profile:save():unwrap()
 			end),
 			update2 = run(function()
 				return profile:update(function(data)
@@ -135,9 +138,9 @@ TEST("pending chaining", function()
 				return store:load("k", {})
 			end),
 			wait = run(function()
-				local profile = store:wait_loaded("k", {})
-				profile:update(helpers.set(3))
-				profile:save()
+				local profile = store:wait_loaded("k", {}):unwrap()
+				profile:update(helpers.set(3)):unwrap()
+				profile:save():unwrap()
 				return profile
 			end),
 			wait2 = run(function()
@@ -148,10 +151,10 @@ TEST("pending chaining", function()
 		scheduler.step(1)
 		CHECK(handles.load.done and handles.wait2.done and not handles.wait.done)
 		scheduler.step(1)
-		all_done(handles)
-		CHECK(handles.wait.result == handles.load.result and handles.wait2.result == handles.load.result)
+		local values = all_done(handles)
+		CHECK(values.wait == values.load and values.wait2 == values.load)
 		CHECK(helpers.record(hook, "k").data.coins == 3)
-		helpers.kill(handles.load.result)
+		helpers.kill(values.load)
 		drain()
 	end)
 
@@ -166,13 +169,13 @@ TEST("pending chaining", function()
 				return g:update(helpers.add(1))
 			end),
 			fetch = run(function()
-				fetched = g:fetch()
+				fetched = g:fetch():unwrap()
 			end),
 			update2 = run(function()
 				return g:update(helpers.add(2))
 			end),
 			save = run(function()
-				g:save()
+				g:save():unwrap()
 			end),
 			unload = run(function()
 				g:unload()
@@ -194,9 +197,9 @@ TEST("pending chaining", function()
 		local store = helpers.make_store(hook, scheduler)
 		local a, b
 		helpers.sync(scheduler, function()
-			a = store:load("a", {})
-			b = store:load("b", {})
-			a:update(helpers.set(100))
+			a = store:load("a", {}):unwrap()
+			b = store:load("b", {}):unwrap()
+			a:update(helpers.set(100)):unwrap()
 		end)
 		hook.latency = 1
 		local seen
@@ -215,13 +218,12 @@ TEST("pending chaining", function()
 				end)
 			end),
 			save = run(function()
-				a:save()
+				a:save():unwrap()
 			end),
 		}
 		none_done(handles)
 		helpers.tick(scheduler, 10)
-		all_done(handles)
-		CHECK(handles.tx.result == true)
+		CHECK(all_done(handles).tx == true)
 		CHECK(seen == 70 and a:get_data().coins == 71 and b:get_data().coins == 30)
 		local ra = helpers.record(hook, "a")
 		CHECK(ra.data.coins == 71 and ra.pending == nil)
@@ -234,9 +236,9 @@ TEST("pending chaining", function()
 		local store = helpers.make_store(hook, scheduler)
 		local a, b
 		helpers.sync(scheduler, function()
-			a = store:load("a", {})
-			b = store:load("b", {})
-			a:update(helpers.set(100))
+			a = store:load("a", {}):unwrap()
+			b = store:load("b", {}):unwrap()
+			a:update(helpers.set(100)):unwrap()
 		end)
 		hook.latency = 1
 		local seen: { number } = {}
@@ -265,8 +267,8 @@ TEST("pending chaining", function()
 		}
 		none_done(handles)
 		helpers.tick(scheduler, 20)
-		all_done(handles)
-		CHECK(handles.tx1.result == true and handles.tx2.result == true)
+		local values = all_done(handles)
+		CHECK(values.tx1 == true and values.tx2 == true)
 		CHECK(seen[1] == 100 and seen[2] == 90) -- tx2 saw tx1's result
 		-- the update queued on b before tx2 got there: it runs between the two
 		CHECK(seen_by_update == 10)
@@ -284,9 +286,9 @@ TEST("pending chaining", function()
 		end)
 		local g = store:get_lockless("g", {})
 		helpers.sync(scheduler, function()
-			a:update(helpers.set(100))
-			g:update(helpers.set(1))
-			g:save()
+			a:update(helpers.set(100)):unwrap()
+			g:update(helpers.set(1)):unwrap()
+			g:save():unwrap()
 		end)
 		hook.latency = 1
 		local handles = {
@@ -306,8 +308,7 @@ TEST("pending chaining", function()
 		}
 		none_done(handles)
 		helpers.tick(scheduler, 20)
-		all_done(handles)
-		CHECK(handles.tx.result == true)
+		CHECK(all_done(handles).tx == true)
 		CHECK(not a.open and not g.open)
 		local ra, rg = helpers.record(hook, "a"), helpers.record(hook, "g")
 		CHECK(ra.data.coins == 70 and ra.pending == nil and ra.lock == nil)
@@ -320,16 +321,16 @@ TEST("pending chaining", function()
 		local store = helpers.make_store(hook, scheduler)
 		local a, b, g
 		helpers.sync(scheduler, function()
-			a = store:load("a", {})
-			b = store:load("b", {})
+			a = store:load("a", {}):unwrap()
+			b = store:load("b", {}):unwrap()
 			g = store:get_lockless("g", {})
-			a:update(helpers.set(100))
-			g:update(helpers.set(1))
+			a:update(helpers.set(100)):unwrap()
+			g:update(helpers.set(1)):unwrap()
 		end)
 		hook.latency = 1
 		local handles = {
 			save = run(function()
-				b:save()
+				b:save():unwrap()
 			end),
 			tx = run(function()
 				return dataforge.transaction({ a, g }, function(ctx)
@@ -345,8 +346,7 @@ TEST("pending chaining", function()
 		CHECK(store.closed)
 		none_done(handles)
 		helpers.tick(scheduler, 20)
-		all_done(handles)
-		CHECK(handles.tx.result == true)
+		CHECK(all_done(handles).tx == true)
 		CHECK(not a.open and not b.open and not g.open)
 		for _, key in { "a", "b", "g" } do
 			local record = helpers.record(hook, key)
@@ -364,10 +364,10 @@ TEST("pending chaining", function()
 		hook.latency = 1
 		local handles = {
 			save1 = run(function()
-				profile:save()
+				profile:save():unwrap()
 			end),
 			save2 = run(function()
-				profile:save()
+				profile:save():unwrap()
 			end),
 			settled = run(function()
 				profile:wait_settled()
@@ -380,7 +380,7 @@ TEST("pending chaining", function()
 		all_done(handles)
 		-- once settled, an update does not yield
 		helpers.sync(scheduler, function()
-			profile:update(helpers.set(1))
+			profile:update(helpers.set(1)):unwrap()
 		end)
 		helpers.kill(profile)
 		drain()
@@ -396,13 +396,13 @@ TEST("pending chaining", function()
 		local before = helpers.record(hook, "k")
 		local handles = {
 			save = run(function()
-				profile:save()
+				return profile:save()
 			end),
 			update = run(function()
 				return profile:update(helpers.set(3))
 			end),
 			save2 = run(function()
-				profile:save()
+				return profile:save()
 			end),
 			unload = run(function()
 				profile:unload()
@@ -412,7 +412,13 @@ TEST("pending chaining", function()
 		for _, handle in handles :: { [string]: helpers.Handle } do
 			CHECK(handle.done)
 		end
-		helpers.finished(handles.save, "save") -- cancelled write, no error
+		-- the first save's write is cancelled: it reports the loss (with the
+		-- thief's lock); the unload already queued behind it still runs the
+		-- chain out without throwing
+		local err = helpers.err(handles.save, "lock_lost")
+		CHECK(err.profile == profile and err.lock.id == "thief")
+		CHECK(handles.update.ok and handles.save2.ok)
+		helpers.finished(handles.unload, "unload")
 		CHECK(not profile.open)
 		CHECK(helpers.deep_equal(before, helpers.record(hook, "k")), "a lost profile wrote to the record")
 		drain()

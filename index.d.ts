@@ -198,6 +198,165 @@ declare namespace dataforge {
 	type TxOutcome = "committed" | "aborted";
 
 	/*
+		Errors and results
+	*/
+
+	interface ErrorBase {
+		readonly type: string;
+		/** Human readable; `tostring(err)` returns it. */
+		readonly message: string;
+	}
+
+	/** Storage kept failing after `retry_attempts`. */
+	interface RobloxError extends ErrorBase {
+		readonly type: "roblox";
+		readonly op: "get_async" | "update_async";
+		readonly store: string;
+		readonly key: string;
+		/** The last raw error the storage hook threw. */
+		readonly cause: unknown;
+	}
+
+	/** `load` / `readquire` gave up after `load_timeout`. */
+	interface TimeoutError extends ErrorBase {
+		readonly type: "timeout";
+		readonly key: string;
+		/** The last lock seen on the record (its holder). */
+		readonly lock: Lock | undefined;
+	}
+
+	/** A write found the session lock is not ours; the profile is closed. */
+	interface LockLostError extends ErrorBase {
+		readonly type: "lock_lost";
+		readonly profile: Profile<any>;
+		/** The lock now on the record, `undefined` when it was wiped. */
+		readonly lock: Lock | undefined;
+	}
+
+	/** The profile was released and not readquired. */
+	interface NotLockedError extends ErrorBase {
+		readonly type: "not_locked";
+		readonly profile: Profile<any>;
+	}
+
+	/** Another server holds a live session lock on a lockless key; the profile is closed. */
+	interface ProfileLockedError extends ErrorBase {
+		readonly type: "profile_locked";
+		readonly profile: LocklessProfile<any>;
+		readonly lock: Lock;
+	}
+
+	/** The transaction lock a lockless participant held is gone or replaced; the profile is closed. */
+	interface TxLockLostError extends ErrorBase {
+		readonly type: "tx_lock_lost";
+		readonly profile: LocklessProfile<any>;
+		/** The transaction lock this profile held. */
+		readonly expected: Lock;
+		/** The lock now on the record, `undefined` when none. */
+		readonly lock: Lock | undefined;
+	}
+
+	/** The record was written by a newer server (more migrations than declared). */
+	interface OutdatedError extends ErrorBase {
+		readonly type: "outdated";
+		readonly profile: LocklessProfile<any>;
+		readonly record_migrations: string[];
+		readonly declared_migrations: string[];
+	}
+
+	/** Lockless `get_data` before any fetch / flush. Thrown, never returned. */
+	interface NotFetchedError extends ErrorBase {
+		readonly type: "not_fetched";
+		readonly profile: LocklessProfile<any>;
+	}
+
+	/** The profile is closed (or closed while the call waited for it). */
+	interface ProfileClosedError extends ErrorBase {
+		readonly type: "profile_closed";
+		readonly profile: AnyProfile<any>;
+		readonly reason: "unloaded" | "lock_lost";
+	}
+
+	/** The record's applied migrations do not prefix-match the declared ones. */
+	interface MigrationMismatchError extends ErrorBase {
+		readonly type: "migration_mismatch";
+		readonly key: string;
+		/** Set when a name differs: the record's and the declared migration there. */
+		readonly index: number | undefined;
+		readonly expected: string | undefined;
+		readonly actual: string | undefined;
+		/** Names the record has applied / this store declares. */
+		readonly applied: string[];
+		readonly declared: string[];
+	}
+
+	/** The transaction aborted. */
+	interface TxAbortedError extends ErrorBase {
+		readonly type: "tx_aborted";
+		readonly id: string;
+		/**
+		 * The error of the participant that failed phase 1; `undefined` when
+		 * the marker was already resolved as aborted by another server.
+		 */
+		readonly cause: DataforgeError | undefined;
+	}
+
+	/** The marker datastore holds something other than "committed" / "aborted". */
+	interface TxMarkerInvalidError extends ErrorBase {
+		readonly type: "tx_marker_invalid";
+		readonly id: string;
+		readonly value: unknown;
+	}
+
+	interface StoreClosedError extends ErrorBase {
+		readonly type: "store_closed";
+		readonly store: Store<any>;
+	}
+
+	interface AlreadyLoadedError extends ErrorBase {
+		readonly type: "already_loaded";
+		readonly store: Store<any>;
+		readonly key: string;
+	}
+
+	/** Every runtime failure the library reports. Narrow on `type`. */
+	type DataforgeError =
+		| RobloxError
+		| TimeoutError
+		| LockLostError
+		| NotLockedError
+		| ProfileLockedError
+		| TxLockLostError
+		| OutdatedError
+		| NotFetchedError
+		| ProfileClosedError
+		| MigrationMismatchError
+		| TxAbortedError
+		| TxMarkerInvalidError
+		| StoreClosedError
+		| AlreadyLoadedError;
+
+	interface Ok<T> {
+		readonly success: true;
+		readonly value: T;
+		/** Returns `value`. */
+		unwrap(): T;
+	}
+
+	interface Err {
+		readonly success: false;
+		readonly error: DataforgeError;
+		/** Throws `error` (the table itself). */
+		unwrap(): never;
+	}
+
+	/**
+	 * What every fallible call returns. Programmer errors (bad config, misuse
+	 * of a transaction) and errors thrown by your own callbacks still throw.
+	 */
+	type Result<T> = Ok<T> | Err;
+
+	/*
 		Profiles
 	*/
 
@@ -216,16 +375,22 @@ declare namespace dataforge {
 		readonly open: boolean;
 		readonly migrations: string[];
 
-		/** Current data. Throws if the profile is closed or (lockless) not fetched. */
+		/**
+		 * Current data. A plain accessor: throws a `DataforgeError`
+		 * (`profile_closed`, or `not_fetched` for a lockless profile).
+		 */
 		get_data(): T;
-		save(): void;
+		/** Fails with `profile_closed`, `not_locked`, `roblox`, `lock_lost` (locked) or `profile_locked`, `outdated`, ... (lockless). */
+		save(): Result<void>;
 		unload(): void;
 		/**
 		 * Applies `dispatcher` to the current data. Returning `undefined` or
-		 * `false` leaves the data untouched (returns `false`); anything else
-		 * becomes the new data and is persisted on the next save.
+		 * `false` leaves the data untouched (`Ok(false)`); anything else
+		 * becomes the new data and is persisted on the next save (`Ok(true)`).
+		 * Fails with `profile_closed` / `not_locked`; an error thrown by the
+		 * dispatcher propagates as is.
 		 */
-		update(dispatcher: DataDispatcher<T>): boolean;
+		update(dispatcher: DataDispatcher<T>): Result<boolean>;
 
 		on_change(callback: (newData: T, oldData: T | undefined) => void): void;
 		on_save(callback: () => void): void;
@@ -255,8 +420,8 @@ declare namespace dataforge {
 		/**
 		 * Whether the profile currently holds its session lock. True after
 		 * `load`; `release` clears it, `readquire` takes it again. While
-		 * released, `update` / `save` throw and the profile cannot join a
-		 * transaction.
+		 * released, `update` / `save` fail with `not_locked` and the profile
+		 * cannot join a transaction.
 		 */
 		readonly is_locked: boolean;
 
@@ -266,13 +431,15 @@ declare namespace dataforge {
 		/**
 		 * Writes the data and gives the session lock back, keeping the profile
 		 * open so another server may take the key. No-op when already released.
+		 * Fails with `profile_closed`, `roblox` or `lock_lost`.
 		 */
-		release(): void;
+		release(): Result<void>;
 		/**
 		 * Takes the session lock again (waits like `load` does) and adopts the
-		 * stored record as the current data. No-op when already locked.
+		 * stored record as the current data. No-op when already locked. Fails
+		 * with `timeout`, `profile_closed`, `roblox`, `migration_mismatch`.
 		 */
-		readquire(): void;
+		readquire(): Result<void>;
 	}
 
 	/** Profile without a session lock; updates are queued and folded into storage on save. */
@@ -286,9 +453,10 @@ declare namespace dataforge {
 		/**
 		 * Reads the stored record into the local data: migrations are applied,
 		 * then the queued updates replayed on top. Marks the profile fetched.
-		 * Yields. Throws (keeping the queue) if a session lock is on the record.
+		 * Yields. Fails (keeping the queue) with `profile_locked` if a session
+		 * lock is on the record, `roblox`, `migration_mismatch`, `profile_closed`.
 		 */
-		fetch(): T;
+		fetch(): Result<T>;
 	}
 
 	/** Either profile kind; narrow on `kind`. */
@@ -310,8 +478,12 @@ declare namespace dataforge {
 		readonly migrations: string[];
 
 		get_data(): T;
-		/** Calls `GetAsync` again and replaces `lock`, `pending`, `migrations` and the data. Yields. */
-		refresh(): T;
+		/**
+		 * Calls `GetAsync` again and replaces `lock`, `pending`, `migrations`
+		 * and the data. Yields. Fails with `roblox` or `migration_mismatch`,
+		 * keeping the previous snapshot.
+		 */
+		refresh(): Result<T>;
 	}
 
 	/*
@@ -334,36 +506,46 @@ declare namespace dataforge {
 		readonly profiles: ReadonlyMap<string, Profile<T>>;
 		readonly lockless_profiles: ReadonlyMap<string, LocklessProfile<T>>;
 
-		/** Takes the session lock for `key` and loads it. Yields. Throws when already loaded. */
-		load(key: string, user_ids: number[]): Profile<T>;
-		/** Returns the profile for `key`, waiting for it to load or loading it if nobody has yet. */
-		wait_loaded(key: string, user_ids: number[]): Profile<T>;
+		/**
+		 * Takes the session lock for `key` and loads it. Yields. Fails with
+		 * `store_closed`, `already_loaded`, `timeout`, `roblox`,
+		 * `migration_mismatch` or `tx_marker_invalid`.
+		 */
+		load(key: string, user_ids: number[]): Result<Profile<T>>;
+		/**
+		 * Returns the profile for `key`, waiting for it to load or loading it
+		 * if nobody has yet. Waiters get the same result as the load.
+		 */
+		wait_loaded(key: string, user_ids: number[]): Result<Profile<T>>;
 		get_loaded(key: string): Profile<T> | undefined;
 
 		/**
 		 * Returns the lockless profile for `key`, creating it if needed. Never
 		 * yields: a lockless profile does no storage work until `fetch`.
+		 * Throws a `store_closed` error on a closed store.
 		 */
 		get_lockless(key: string, user_ids: number[]): LocklessProfile<T>;
 
 		/**
 		 * Read-only snapshot of `key` via `GetAsync`: the current data and lock.
 		 * Yields. The result is not tracked by the store, takes no lock and
-		 * cannot join a transaction.
+		 * cannot join a transaction. Fails with `store_closed`, `roblox` or
+		 * `migration_mismatch`.
 		 */
-		peek(key: string): PeekProfile<T>;
+		peek(key: string): Result<PeekProfile<T>>;
 
 		/**
 		 * Atomically updates profiles of this store (locked or lockless).
 		 * `transform` gets their data in order and returns the new data in the
-		 * same order, or `false` to cancel. Returns `false` when cancelled,
-		 * `true` when committed; throws when aborted.
+		 * same order, or `false` to cancel. `Ok(false)` when cancelled,
+		 * `Ok(true)` when committed; fails like `dataforge.transaction`, plus
+		 * `store_closed`.
 		 */
 		transaction(
 			profiles: ProfileBase<T>[],
 			transform: (data: T[]) => T[] | false,
 			config?: TransactionConfig,
-		): boolean;
+		): Result<boolean>;
 
 		on_change(callback: (profile: AnyProfile<T>, newData: T, oldData: T | undefined) => void): void;
 		on_save(callback: (profile: AnyProfile<T>) => void): void;
@@ -390,14 +572,17 @@ declare namespace dataforge {
 	 * and lockless ones. `process` reads with `ctx.get(profile)` and stages
 	 * writes with `ctx.set(profile, newData)`; return `false` to cancel.
 	 *
-	 * Returns `false` when cancelled, `true` when committed. Throws when aborted.
-	 * `config` defaults its retry settings to the first profile's.
+	 * `Ok(false)` when cancelled, `Ok(true)` when committed. Fails with
+	 * `tx_aborted` (see its `cause`), `profile_closed`, `not_locked`, or what
+	 * flushing a lockless participant raised. Misuse and errors thrown by
+	 * `process` throw. `config` defaults its retry settings to the first
+	 * profile's.
 	 */
 	function transaction(
 		profiles: ProfileBase<any>[],
 		process: (ctx: TxContext) => boolean | undefined,
 		config?: TransactionConfig,
-	): boolean;
+	): Result<boolean>;
 
 	namespace hooks {
 		namespace memory {

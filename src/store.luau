@@ -1,5 +1,7 @@
 --! strict
 
+local errors = require "./errors"
+local result = require "./result"
 local types = require "./types"
 local utils = require "./utils"
 local roblox_scheduler = require "./schedulers/roblox"
@@ -20,6 +22,7 @@ type Profile<T = any> = types.Profile<T>
 type LocklessProfile<T = any> = types.LocklessProfile<T>
 type PeekProfile<T = any> = types.PeekProfile<T>
 type HooksList<T... = ()> = types.HooksList<T...>
+type Result<T> = types.Result<T>
 
 export type Store<T = any> = {
 	_loading: { [string]: boolean },
@@ -43,30 +46,37 @@ export type Store<T = any> = {
 	},
 
 	config: ResolvedConfig<T>,
-	load: (self: Store<T>, key: string, user_ids: { number }) -> Profile<T>,
-	wait_loaded: (self: Store<T>, key: string, user_ids: { number }) -> Profile<T>,
+	--- Takes the session lock for `key` and loads it. Yields. Fails with
+	--- `store_closed`, `already_loaded`, `timeout`, `roblox`,
+	--- `migration_mismatch` or `tx_marker_invalid`.
+	load: (self: Store<T>, key: string, user_ids: { number }) -> Result<Profile<T>>,
+	--- Returns the profile for `key`, waiting for it to load or loading it if
+	--- nobody has yet. Waiters get the same Result as the load.
+	wait_loaded: (self: Store<T>, key: string, user_ids: { number }) -> Result<Profile<T>>,
 	get_loaded: (self: Store<T>, key: string) -> Profile<T>?,
 
 	--- Returns the lockless profile for `key`, creating it if needed. Never
-	--- yields: a lockless profile does no storage work until `fetch`.
+	--- yields: a lockless profile does no storage work until `fetch`. Throws a
+	--- `store_closed` error on a closed store.
 	get_lockless: (self: Store<T>, key: string, user_ids: { number }) -> LocklessProfile<T>,
 
 	--- Read-only snapshot of `key` via `GetAsync`: the current data and lock.
 	--- Yields. The result is not tracked by the store, takes no lock and cannot
-	--- join a transaction.
-	peek: (self: Store<T>, key: string) -> PeekProfile<T>,
+	--- join a transaction. Fails with `store_closed`, `roblox` or
+	--- `migration_mismatch`.
+	peek: (self: Store<T>, key: string) -> Result<PeekProfile<T>>,
 
 	--- Atomically updates profiles of this store (locked or lockless). `transform`
 	--- gets their data in order and returns the new data in the same order, or
-	--- false to cancel. Returns false when cancelled, true when committed; throws
-	--- when aborted. `config` fills in what the store does not know (ttls, retry);
-	--- hook and scheduler default to the store's.
+	--- false to cancel. Ok(false) when cancelled, Ok(true) when committed; fails
+	--- like `dataforge.transaction`. `config` fills in what the store does not
+	--- know (ttls, retry); hook and scheduler default to the store's.
 	transaction: (
 		self: Store<T>,
 		profiles: Array<ProfileBase<T>>,
 		transform: (data: Array<T>) -> Array<T> | false,
 		config: types.TransactionConfig?
-	) -> boolean,
+	) -> Result<boolean>,
 
 	on_change: (self: Store<T>, callback: (profile: Profile<T>, new: T, old: T?) -> ()) -> (),
 	on_save: (self: Store<T>, callback: (profile: Profile<T>) -> ()) -> (),
@@ -77,7 +87,9 @@ export type Store<T = any> = {
 	close: (self: Store<T>) -> (),
 }
 
-local function resume_load_locks(self: Store, key: string, ok: boolean, result: any)
+--- Resumes every `wait_loaded` caller with the load's Result, or with a raw
+--- error (`res == nil`) they rethrow.
+local function resume_load_locks(self: Store, key: string, res: Result<Profile>?, raw: any?)
 	local loading_locks = self._loading_locks[key]
 	if not loading_locks then
 		return
@@ -85,7 +97,7 @@ local function resume_load_locks(self: Store, key: string, ok: boolean, result: 
 	self._loading_locks[key] = nil
 
 	for _, thread in loading_locks do
-		self.config._scheduler.spawn(thread, ok, result)
+		self.config._scheduler.spawn(thread, res, raw)
 	end
 end
 
@@ -202,16 +214,16 @@ function store.create<T>(config: Config<T>): Store<T>
 	return setmetatable(self, store) :: any
 end
 
-function store.load(self: Store, key: string, user_ids: { number }): Profile
+function store.load(self: Store, key: string, user_ids: { number }): Result<Profile>
 	if self.closed then
-		error "datastore: store is closed"
+		return result.err(errors.store_closed(self))
 	end
 	if self.profiles[key] ~= nil or self._loading[key] then
-		error(`datastore: "{key}" is already loaded in this store`)
+		return result.err(errors.already_loaded(self, key))
 	end
 	self._loading[key] = true
 
-	local ok, profile = pcall(profile.load, {
+	local ok, loaded = utils.try(profile.load, {
 		key = key,
 		config = self.config,
 		user_ids = user_ids,
@@ -220,29 +232,37 @@ function store.load(self: Store, key: string, user_ids: { number }): Profile
 	self._loading[key] = nil
 
 	if not ok then
-		resume_load_locks(self, key, false, profile)
-		error(profile, 0)
+		if errors.is(loaded) then
+			local failure = result.err(loaded)
+			resume_load_locks(self, key, failure)
+			return failure
+		end
+		-- a migration threw: everyone waiting gets the raw error too
+		resume_load_locks(self, key, nil, loaded)
+		error(loaded, 0)
 	end
 
-	profile:on_closed(function()
-		unregister_profile(self, profile)
+	loaded:on_closed(function()
+		unregister_profile(self, loaded)
 	end)
-	forward_hooks(self, profile)
+	forward_hooks(self, loaded)
 
-	self.profiles[key] = profile
-	resume_load_locks(self, key, ok, profile)
-	return profile
+	self.profiles[key] = loaded
+	local success = result.ok(loaded)
+	resume_load_locks(self, key, success)
+	return success
 end
 
---- Returns the profile for `key`, waiting for it to load or loading it if nobody has yet.
-function store.wait_loaded(self: Store, key: string, user_ids: { number }): Profile
+--- Returns the profile for `key`, waiting for it to load or loading it if
+--- nobody has yet. Waiters get the same Result (or raw error) as the load.
+function store.wait_loaded(self: Store, key: string, user_ids: { number }): Result<Profile>
 	if self.closed then
-		error "datastore: store is closed"
+		return result.err(errors.store_closed(self))
 	end
 
 	local existing = self.profiles[key]
 	if existing ~= nil then
-		return existing
+		return result.ok(existing)
 	end
 
 	if not self._loading[key] then
@@ -250,12 +270,11 @@ function store.wait_loaded(self: Store, key: string, user_ids: { number }): Prof
 	end
 	insert_loaded_lock(self, key)
 
-	local ok, result = coroutine.yield()
-	if not ok then
-		error(result, 0)
+	local res, raw = coroutine.yield()
+	if res == nil then
+		error(raw, 0)
 	end
-
-	return result
+	return res
 end
 
 function store.get_loaded(self: Store, key: string): Profile?
@@ -264,7 +283,7 @@ end
 
 function store.get_lockless(self: Store, key: string, user_ids: { number }): LocklessProfile
 	if self.closed then
-		error "datastore: store is closed"
+		error(errors.store_closed(self), 0)
 	end
 
 	local existing = self.lockless_profiles[key]
@@ -292,9 +311,9 @@ end
 
 --- One `get_async` on `key`, no write. Never registered in the store: `close`
 --- does not know about it and hooks do not fire for it.
-function store.peek(self: Store, key: string): PeekProfile
+function store.peek(self: Store, key: string): Result<PeekProfile>
 	if self.closed then
-		error "datastore: store is closed"
+		return result.err(errors.store_closed(self))
 	end
 
 	return peek_profile.create {
@@ -317,9 +336,9 @@ function store.transaction(
 	profiles: Array<ProfileBase>,
 	transform: (data: Array<any>) -> Array<any> | false,
 	config: types.TransactionConfig?
-): boolean
+): Result<boolean>
 	if self.closed then
-		error "datastore: store is closed"
+		return result.err(errors.store_closed(self))
 	end
 
 	local resolved = tx.resolve_config(config, {
@@ -335,11 +354,11 @@ function store.transaction(
 			datas[index] = ctx:get(participant)
 		end
 
-		local result = transform(datas)
-		if result == false then
+		local transformed = transform(datas)
+		if transformed == false then
 			return false
 		end
-		local new_datas = result :: Array<any>
+		local new_datas = transformed :: Array<any>
 
 		for index, participant in profiles do
 			local new = new_datas[index]

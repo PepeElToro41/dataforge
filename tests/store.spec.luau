@@ -64,7 +64,9 @@ TEST("store", function()
 		local again = helpers.run(scheduler, function()
 			return store:load("k1", {})
 		end)
-		helpers.failed(again, "already loaded")
+		local err = helpers.err(again, "already_loaded")
+		CHECK(err.key == "k1" and err.store == store)
+		CHECK(string.find(tostring(err), "already loaded", 1, true) ~= nil)
 
 		helpers.sync(scheduler, function()
 			profile:unload()
@@ -87,7 +89,7 @@ TEST("store", function()
 		local second = helpers.run(scheduler, function()
 			return store:load("k1", {})
 		end)
-		helpers.failed(second, "already loaded")
+		CHECK(helpers.err(second, "already_loaded").key == "k1")
 		scheduler.step(1)
 		helpers.finished(first)
 	end)
@@ -118,10 +120,8 @@ TEST("store", function()
 		end)
 		CHECK(not load.done and not w1.done and not w2.done)
 		scheduler.step(1)
-		helpers.finished(load)
-		helpers.finished(w1)
-		helpers.finished(w2)
-		CHECK(w1.result == load.result and w2.result == load.result)
+		local loaded = helpers.finished(load)
+		CHECK(helpers.finished(w1) == loaded and helpers.finished(w2) == loaded)
 		-- only one lock write happened
 		CHECK(helpers.ops(hook, helpers.STORE, "k1", "update_async") == 1)
 	end)
@@ -137,8 +137,12 @@ TEST("store", function()
 			return store:wait_loaded("k1", {})
 		end)
 		scheduler.step(1)
-		helpers.failed(load, "storage down")
-		helpers.failed(waiter, "storage down")
+		local err = helpers.err(load, "roblox")
+		CHECK(err.op == "update_async" and err.store == helpers.STORE and err.key == "k1")
+		CHECK(err.cause == "storage down")
+		CHECK(string.find(tostring(err), "storage down", 1, true) ~= nil)
+		-- waiters get the very same error
+		CHECK(helpers.err(waiter, "roblox") == err)
 		CHECK(store:get_loaded "k1" == nil)
 		-- the key is free again
 		local retry = helpers.run(scheduler, function()
@@ -190,16 +194,16 @@ TEST("store", function()
 		-- the initial set_data happens before forwarding is attached
 		CHECK(#log == 0)
 		helpers.sync(scheduler, function()
-			a:update(helpers.set(5))
-			a:save()
+			a:update(helpers.set(5)):unwrap()
+			a:save():unwrap()
 		end)
 		CHECK(log[1] == "change:a:5:0" and log[2] == "save:a", table.concat(log, ","))
 
 		local g = store:get_lockless("g", {})
 		helpers.sync(scheduler, function()
-			g:fetch()
-			g:update(helpers.add(2))
-			g:save()
+			g:fetch():unwrap()
+			g:update(helpers.add(2)):unwrap()
+			g:save():unwrap()
 		end)
 		CHECK(log[3] == "change:g:0:nil" and log[4] == "change:g:2:0" and log[5] == "save:g", table.concat(log, ","))
 		-- the save writes the queue and re-sets the data from what landed
@@ -225,9 +229,10 @@ TEST("store", function()
 		end)
 		hook.data[helpers.STORE].a.lock.id = "thief"
 		local save = helpers.run(scheduler, function()
-			a:save()
+			return a:save()
 		end)
-		CHECK(save.done)
+		local err = helpers.err(save, "lock_lost")
+		CHECK(err.profile == a and err.lock.id == "thief")
 		CHECK(not a.open)
 
 		local g = store:get_lockless("g", {})
@@ -235,7 +240,8 @@ TEST("store", function()
 		local fetch = helpers.run(scheduler, function()
 			return g:fetch()
 		end)
-		helpers.failed(fetch, "session locked")
+		err = helpers.err(fetch, "profile_locked")
+		CHECK(err.profile == g and err.lock.id == "thief")
 		CHECK(#lost == 2 and lost[1] == "a" and lost[2] == "g")
 		CHECK(store:get_loaded "a" == nil and store.lockless_profiles.g == nil)
 	end)
@@ -263,11 +269,11 @@ TEST("store", function()
 		local store = helpers.make_store(hook, scheduler)
 		local a, b, g
 		helpers.sync(scheduler, function()
-			a = store:load("a", {})
-			b = store:load("b", {})
+			a = store:load("a", {}):unwrap()
+			b = store:load("b", {}):unwrap()
 			g = store:get_lockless("g", {})
-			a:update(helpers.set(1))
-			g:update(helpers.add(3))
+			a:update(helpers.set(1)):unwrap()
+			g:update(helpers.add(3)):unwrap()
 		end)
 		hook.latency = 1
 		local close = helpers.run(scheduler, function()
@@ -284,31 +290,38 @@ TEST("store", function()
 		CHECK(helpers.record(hook, "g").data.coins == 3)
 		CHECK(helpers.count(store.profiles) == 0 and helpers.count(store.lockless_profiles) == 0)
 
-		helpers.failed(
+		local err = helpers.err(
 			helpers.run(scheduler, function()
 				return store:load("c", {})
 			end),
-			"closed"
+			"store_closed"
 		)
-		helpers.failed(
+		CHECK(err.store == store)
+		CHECK(string.find(tostring(err), "closed", 1, true) ~= nil)
+		helpers.err(
 			helpers.run(scheduler, function()
 				return store:wait_loaded("c", {})
 			end),
-			"closed"
+			"store_closed"
 		)
-		helpers.failed(
+		helpers.err(
 			helpers.run(scheduler, function()
-				return store:get_lockless("c", {})
+				return store:peek "c"
 			end),
-			"closed"
+			"store_closed"
 		)
-		helpers.failed(
+		-- get_lockless never yields: it throws the error table instead
+		local thrown = helpers.threw(function()
+			return store:get_lockless("c", {})
+		end, "store_closed")
+		CHECK(thrown.store == store)
+		helpers.err(
 			helpers.run(scheduler, function()
 				return store:transaction({ a }, function(datas)
 					return datas
 				end)
 			end),
-			"closed"
+			"store_closed"
 		)
 		-- second close is a no-op and does not yield
 		helpers.sync(scheduler, function()
@@ -328,8 +341,8 @@ TEST("store", function()
 		local store = helpers.make_store(hook, scheduler, { retry_attempts = 1 })
 		local a, b
 		helpers.sync(scheduler, function()
-			a = store:load("a", {})
-			b = store:load("b", {})
+			a = store:load("a", {}):unwrap()
+			b = store:load("b", {}):unwrap()
 		end)
 		hook:fail_next(helpers.STORE, "a", "update_async", "before")
 		local close = helpers.run(scheduler, function()
@@ -346,9 +359,9 @@ TEST("store", function()
 		local store = helpers.make_store(hook, scheduler)
 		local a, b
 		helpers.sync(scheduler, function()
-			a = store:load("a", {})
-			b = store:load("b", {})
-			a:update(helpers.set(10))
+			a = store:load("a", {}):unwrap()
+			b = store:load("b", {}):unwrap()
+			a:update(helpers.set(10)):unwrap()
 		end)
 		local seen
 		local ok = helpers.sync(scheduler, function()
@@ -367,8 +380,8 @@ TEST("store", function()
 		local store = helpers.make_store(hook, scheduler)
 		local a, b
 		helpers.sync(scheduler, function()
-			a = store:load("a", {})
-			b = store:load("b", {})
+			a = store:load("a", {}):unwrap()
+			b = store:load("b", {}):unwrap()
 		end)
 		local before = #hook.ops
 		local ok = helpers.sync(scheduler, function()
@@ -385,8 +398,8 @@ TEST("store", function()
 		local store = helpers.make_store(hook, scheduler)
 		local a, b
 		helpers.sync(scheduler, function()
-			a = store:load("a", {})
-			b = store:load("b", {})
+			a = store:load("a", {}):unwrap()
+			b = store:load("b", {}):unwrap()
 		end)
 		local handle = helpers.run(scheduler, function()
 			return store:transaction({ a, b }, function(datas)

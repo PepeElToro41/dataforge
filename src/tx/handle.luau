@@ -7,6 +7,8 @@
 	foreign `pending` entries.
 ]]
 
+local errors = require "../errors"
+local result = require "../result"
 local types = require "../types"
 local utils = require "../utils"
 local roblox_scheduler = require "../schedulers/roblox"
@@ -25,6 +27,7 @@ type ResolvedTransactionConfig = types.ResolvedTransactionConfig
 
 type TxOutcome = types.TxOutcome
 type TxPatch = types.TxPatch
+type Error = types.Error
 export type TxContext = types.TxContext
 
 local tx_handle = {}
@@ -50,19 +53,17 @@ local function resolve_marker_in(
 	id: string,
 	fallback: TxOutcome
 ): TxOutcome
-	local result = utils.retry(config, function()
-		return datastore.update_async(id, function(current: any?)
-			if current == "committed" or current == "aborted" then
-				return current
-			end
-			return fallback
-		end)
+	local outcome = utils.update_async(config, datastore, id, function(current: any?)
+		if current == "committed" or current == "aborted" then
+			return current
+		end
+		return fallback
 	end)
 
-	if result ~= "committed" and result ~= "aborted" then
-		error(`datastore: unexpected tx marker value for {id}: {tostring(result)}`)
+	if outcome ~= "committed" and outcome ~= "aborted" then
+		error(errors.tx_marker_invalid(id, outcome), 0)
 	end
-	return result :: TxOutcome
+	return outcome :: TxOutcome
 end
 
 --- Reads the marker for `id`, writing `fallback` if it has not been decided yet.
@@ -154,42 +155,47 @@ local function prepare_sort(a: TxPatch, b: TxPatch): boolean
 	return sort_key(a.profile) < sort_key(b.profile)
 end
 
---- Locks every profile mutex in order. The returned function releases them in
---- reverse and, for a lockless profile still holding its storage transaction
---- lock (the transaction ended before writing `pending`), gives the key back.
-local function lock_profiles(profiles: Array<ProfileBase>)
+--- Locks every profile mutex in order, appending each one taken to `locked`
+--- so a rejection midway (a mutex closed while waiting) leaves an exact list
+--- for `unlock_all`.
+local function lock_all(profiles: Array<ProfileBase>, locked: Array<ProfileBase>)
 	for _, participant in profiles do
 		participant._mutex:lock()
+		table.insert(locked, participant)
 	end
-	return function()
-		for index = #profiles, 1, -1 do
-			local participant = profiles[index]
-			local lockless = participant :: LocklessProfile
-			if participant.kind == "lockless" and lockless._tx_lock then
-				local ok, err = utils.try(function()
-					lockless:_write_queued {
-						old_tx_lock = lockless._tx_lock,
-					}
-				end)
-				if not ok then
-					participant.config._hook.warn(
-						`datastore: failed to release tx lock on "{participant.key}" (it will expire): {tostring(err)}`
-					)
-					lockless._tx_lock = nil
-				end
+end
+
+--- Releases the mutexes in reverse and, for a lockless profile still holding
+--- its storage transaction lock (the transaction ended before writing
+--- `pending`), gives the key back.
+local function unlock_all(locked: Array<ProfileBase>)
+	for index = #locked, 1, -1 do
+		local participant = locked[index]
+		local lockless = participant :: LocklessProfile
+		if participant.kind == "lockless" and lockless._tx_lock then
+			local ok, err = utils.try(function()
+				lockless:_write_queued {
+					old_tx_lock = lockless._tx_lock,
+				}
+			end)
+			if not ok then
+				participant.config._hook.warn(
+					`datastore: failed to release tx lock on "{participant.key}" (it will expire): {tostring(err)}`
+				)
+				lockless._tx_lock = nil
 			end
-			participant._mutex:unlock()
 		end
+		participant._mutex:unlock()
 	end
 end
 
 local function assert_open_profiles(profiles: Array<ProfileBase>)
 	for _, participant in profiles do
 		if not participant.open then
-			error(`datastore: transaction failed, profile "{participant.key}" is closed`)
+			error(errors.closed(participant), 0)
 		end
 		if participant.kind == "locked" and not (participant :: Profile).is_locked then
-			error(`datastore: transaction failed, profile "{participant.key}" does not hold its session lock`)
+			error(errors.not_locked(participant), 0)
 		end
 	end
 end
@@ -230,7 +236,10 @@ local function locked_patch(participant: Profile, new_data: any): TxPatch
 	patch.prepared = false
 
 	function patch.prepare(pending)
-		return participant:_write_record { release = false, pending = pending }
+		local written, lock = participant:_write_record { release = false, pending = pending }
+		if not written then
+			error(errors.lock_lost(participant, lock), 0)
+		end
 	end
 	function patch.commit(operation)
 		table.insert(participant._cleanup_txs, operation)
@@ -256,13 +265,13 @@ local function lockless_patch(participant: LocklessProfile, new_data: any): TxPa
 	patch.prepared = false
 
 	function patch.prepare(pending)
-		-- releases the transaction lock taken in `adquire_lockless_lock`; fails
-		-- (nothing written) if that lock is gone or someone else's by now
+		-- releases the transaction lock taken in `adquire_lockless_lock`; throws
+		-- `tx_lock_lost` (nothing written) if that lock is gone or someone
+		-- else's by now
 		participant:_write_queued {
 			pending = pending,
 			old_tx_lock = participant._tx_lock,
 		}
-		return true
 	end
 	function patch.commit(operation)
 		participant._known_outcomes[operation.id] = "committed"
@@ -287,13 +296,16 @@ local function make_patch(participant: ProfileBase, new_data: any): TxPatch
 end
 
 --- Runs `process(ctx)` over the given profiles (any store, locked or lockless)
---- and commits every `ctx:set` atomically. Returns false when `process`
---- returns false. Throws when the transaction aborts.
+--- and commits every `ctx:set` atomically. Ok(false) when `process` returns
+--- false, Ok(true) when committed. Fails with `tx_aborted` (its `cause` says
+--- why phase 1 gave up), `profile_closed`, `not_locked`, or what flushing a
+--- lockless participant raised (`profile_locked`, `outdated`, `roblox`, ...).
+--- Argument misuse throws; an error thrown by `process` propagates as is.
 function tx_handle.run(
 	config: ResolvedTransactionConfig,
 	profiles: Array<ProfileBase>,
 	process: (ctx: TxContext) -> boolean?
-): boolean
+): types.Result<boolean>
 	local seen: { [ProfileBase]: boolean } = {}
 	local profile_list: Array<ProfileBase> = {}
 
@@ -301,17 +313,17 @@ function tx_handle.run(
 		if not is_profile(profile) then
 			error "datastore: transaction expects profiles"
 		end
-		if not profile.open then
-			error "datastore: all profiles in a transaction must be open"
-		end
-		if profile.kind == "locked" and not (profile :: Profile).is_locked then
-			error(`datastore: transaction failed, profile "{profile.key}" does not hold its session lock`)
-		end
 		if seen[profile] then
 			error "datastore: a profile was provided twice in a transaction"
 		end
 		if profile.config._hook ~= config._hook then
 			error "datastore: all profiles in a transaction must share the transaction's hook"
+		end
+		if not profile.open then
+			return result.err(errors.closed(profile))
+		end
+		if profile.kind == "locked" and not (profile :: Profile).is_locked then
+			return result.err(errors.not_locked(profile))
 		end
 
 		seen[profile] = true
@@ -323,9 +335,12 @@ function tx_handle.run(
 	end
 	profile_list = utils.sorted(profile_list, profile_sort)
 
-	local unlock_all = lock_profiles(profile_list)
+	local locked: Array<ProfileBase> = {}
 
-	local ok, result: boolean = utils.try(function()
+	local ok, value = utils.try(function()
+		-- inside the protected region: a mutex closed while waiting rejects the
+		-- lock, and the ones already taken must still be given back
+		lock_all(profile_list, locked)
 		assert_open_profiles(profile_list)
 		-- kind of an oxymoron
 		adquire_lockless_lock(config, profile_list)
@@ -385,7 +400,10 @@ function tx_handle.run(
 		-- Phase 1: every changed participant persists its post-tx data as `pending`.
 		local order = utils.sorted(patches, prepare_sort)
 		local desired: TxOutcome = "committed"
-		local reason = ""
+		-- why phase 1 gave up: a library error (reported as the abort's cause)
+		-- or a raw one (an internal invariant; rethrown as is after settling)
+		local cause: Error? = nil
+		local raw: any = nil
 		local expires = config._scheduler.now() + config.tx_ttl
 		local store_name = config._datastore.name
 
@@ -396,13 +414,16 @@ function tx_handle.run(
 				expires = expires,
 				data = patch.new_data,
 			}
-			local write_ok, prepared = utils.try(patch.prepare, pending)
-			if write_ok and prepared == true then
+			local write_ok, err = utils.try(patch.prepare, pending)
+			if write_ok then
 				patch.prepared = true
 			else
 				desired = "aborted"
-				local key = patch.profile.key
-				reason = if not write_ok then tostring(prepared) else `lock lost for "{key}"`
+				if errors.is(err) then
+					cause = err
+				else
+					raw = err
+				end
 				break
 			end
 		end
@@ -414,14 +435,16 @@ function tx_handle.run(
 		if outcome == "committed" then
 			return true
 		end
-		error(`datastore: transaction aborted: {reason}`)
+		if raw ~= nil then
+			error(raw, 0)
+		end
+		-- no cause: every prepare went through but the marker was already
+		-- resolved as aborted by another server (the pending's grace expired)
+		error(errors.tx_aborted(id, cause), 0)
 	end)
 
-	unlock_all()
-	if not ok then
-		error(result)
-	end
-	return result
+	unlock_all(locked)
+	return result.of(ok, value)
 end
 
 return tx_handle

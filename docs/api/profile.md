@@ -8,7 +8,7 @@ Session-locked profile, returned by [`store:load`](./store#store-load-key-user-i
 | --- | --- | --- |
 | `kind` | `"locked"` | |
 | `key` | `string` | Datastore key. |
-| `open` | `boolean` | `false` once closed; most methods throw then. |
+| `open` | `boolean` | `false` once closed; most methods fail with `profile_closed` then. |
 | `is_locked` | `boolean` | Whether the session lock is held. `true` after `load`, `false` after `release`. |
 | `last_write` | `number` | Time of the last successful write. |
 | `user_ids` | `{ number }` | As passed to `load`. |
@@ -24,39 +24,39 @@ Session-locked profile, returned by [`store:load`](./store#store-load-key-user-i
 (self: Profile<T>) -> T
 ```
 
-Current data, deep-frozen. Never mutate it. Throws if the profile is closed.
+Current data, deep-frozen. Never mutate it. Throws a `profile_closed` error table if the profile is closed (a plain accessor, no `Result`).
 
 ### `profile:update(fn)`
 
 ```luau
-(self: Profile<T>, fn: (T) -> T | false) -> boolean
+(self: Profile<T>, fn: (T) -> T | false) -> Result<boolean>
 ```
 
-Calls `fn` with the current data. Returning a new value replaces the data (fires `on_change`, marks dirty); returning `false` or `nil` leaves it untouched. Returns whether the data changed. Throws if closed or released.
+Calls `fn` with the current data. Returning a new value replaces the data (fires `on_change`, marks dirty); returning `false` or `nil` leaves it untouched. `Ok(true)` when the data changed, `Ok(false)` otherwise. Fails with `profile_closed` or `not_locked` (released). An error thrown by `fn` propagates as is.
 
 ### `profile:save()`
 
 ```luau
-(self: Profile<T>) -> ()
+(self: Profile<T>) -> Result<nil>
 ```
 
-Writes the data now (fires `on_save` first) and refreshes the lock. Yields. Throws if closed or released, or when storage keeps failing after retries.
+Writes the data now (fires `on_save` first) and refreshes the lock. Yields. Fails with `profile_closed`, `not_locked`, `roblox` (storage kept failing after retries) or `lock_lost` (another server took the key: the profile is closed, nothing was written).
 
 ### `profile:release()`
 
 ```luau
-(self: Profile<T>) -> ()
+(self: Profile<T>) -> Result<nil>
 ```
 
-Writes the data and gives the session lock back, keeping the profile open so another server may take the key. Afterwards `is_locked` is `false`; `update` / `save` throw, no autosave runs, the profile cannot join a transaction and `unload` writes nothing. No-op when already released.
+Writes the data and gives the session lock back, keeping the profile open so another server may take the key. Afterwards `is_locked` is `false`; `update` / `save` fail with `not_locked`, no autosave runs, the profile cannot join a transaction and `unload` writes nothing. No-op when already released. Fails with `profile_closed`, `roblox` (the lock is still ours, `is_locked` stays `true`) or `lock_lost` (the profile is closed).
 
 ### `profile:readquire()`
 
 ```luau
-(self: Profile<T>) -> ()
+(self: Profile<T>) -> Result<nil>
 ```
 
-Takes the session lock again, waiting like `load` does, and adopts the stored record (resolved pending, migrations) as the current data, firing `on_change`. Throws on timeout, leaving the profile open and released. No-op when already locked.
+Takes the session lock again, waiting like `load` does, and adopts the stored record (resolved pending, migrations) as the current data, firing `on_change`. Fails with `timeout` (leaving the profile open and released), `profile_closed`, `roblox`, `migration_mismatch` or `tx_marker_invalid`. No-op when already locked.
 
 ### `profile:unload()`
 
@@ -80,7 +80,7 @@ Yields until no operation holds or waits on the profile mutex. After it returns,
 (self: Profile<T>) -> ()
 ```
 
-Yields until the profile is closed.
+Yields until the profile is closed. Throws when called on an open profile (misuse).
 
 ## Events
 
@@ -114,8 +114,8 @@ type ProfileBase<T> = {
 	migrations: { string },
 
 	get_data: (self) -> T,
-	update: (self, (T) -> T | false) -> boolean,
-	save: (self) -> (),
+	update: (self, (T) -> T | false) -> Result<boolean>,
+	save: (self) -> Result<nil>,
 	unload: (self) -> (),
 	wait_settled: (self) -> (),
 

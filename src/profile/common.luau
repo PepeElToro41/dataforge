@@ -1,3 +1,4 @@
+local errors = require "../errors"
 local types = require "../types"
 
 type Array<T> = { T }
@@ -8,25 +9,35 @@ export type MigrationsResult = types.MigrationsResult
 
 local common = {}
 
---- Throws right away when the profile is closed, Its not necessary to add this, as it will get rejected either way,
---- by the mutex, but its used to throw instantly.
+--- Throws a `profile_closed` error right away when the profile is closed. Not
+--- strictly needed (the closed mutex rejects the call anyway) but it fails
+--- before queueing on the mutex.
 function common.assert_open(self: ProfileBase)
 	if not self.open then
-		error(`datastore: profile "{self.key}" is closed`, 3)
+		error(errors.closed(self), 0)
 	end
 end
 
 --- Applies the declared migrations not yet in `applied` (in order). Pure, so it
---- is safe inside an update transform. Fails when the record's applied list does
---- not prefix-match the declared list.
-function common.apply_migrations(data: any, applied: { string }, migrations: Array<types.Migration>): MigrationsResult
+--- is safe inside an update transform. Fails (a `migration_mismatch` error in
+--- `err`) when the record's applied list does not prefix-match the declared
+--- list. An error thrown by a migration's `apply` propagates as is.
+function common.apply_migrations(
+	key: string,
+	data: any,
+	applied: { string },
+	migrations: Array<types.Migration>
+): MigrationsResult
 	local applied_count = #applied
 
 	if applied_count > #migrations then
 		return {
 			applied = false,
 			success = false,
-			err = `record has {applied_count} applied migrations but only {#migrations} are declared`,
+			err = errors.migration_mismatch(key, {
+				applied = applied,
+				declared = common.all_migration_names(migrations),
+			}),
 			new_migrations = applied,
 		}
 	end
@@ -38,7 +49,13 @@ function common.apply_migrations(data: any, applied: { string }, migrations: Arr
 			return {
 				applied = false,
 				success = false,
-				err = `migration mismatch at index {index}: record has "{actual}", declared is "{expected}"`,
+				err = errors.migration_mismatch(key, {
+					index = index,
+					expected = expected,
+					actual = actual,
+					applied = applied,
+					declared = common.all_migration_names(migrations),
+				}),
 				new_migrations = applied,
 			}
 		end

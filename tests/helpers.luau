@@ -2,6 +2,7 @@
 
 local dataforge = require "@dataforge"
 local memory = require "@dataforge/hooks/memory"
+local result = require "@dataforge/result"
 local virtual = require "@dataforge/schedulers/virtual"
 local types = require "@dataforge/types"
 
@@ -67,23 +68,38 @@ function helpers.run(scheduler: Scheduler, fn: () -> ...any): Handle
 	return handle
 end
 
---- Runs `fn` inside the scheduler and asserts it finished synchronously and successfully.
+--- A call's outcome unwrapped: a Result must be successful (its value is
+--- returned), anything else is returned as is.
+local function unwrap(value: any, what: string, level: number): any
+	if result.is(value) then
+		if not value.success then
+			error(`{what} failed: {tostring(value.error)} ({value.error.type})`, level + 1)
+		end
+		return value.value
+	end
+	return value
+end
+
+--- Runs `fn` inside the scheduler and asserts it finished synchronously and
+--- successfully (a Result it returned must be Ok; its value is returned).
 function helpers.sync(scheduler: Scheduler, fn: () -> ...any): any
 	local handle = helpers.run(scheduler, fn)
 	assert(handle.done, "expected call to complete without waiting")
 	if not handle.ok then
 		error(`call failed: {tostring(handle.result)}`, 2)
 	end
-	return handle.result
+	return unwrap(handle.result, "call", 2)
 end
 
---- Asserts a handle finished successfully (message includes the error otherwise).
-function helpers.finished(handle: Handle, what: string?)
+--- Asserts a handle finished successfully (message includes the error
+--- otherwise) and returns what it produced (a Result's value).
+function helpers.finished(handle: Handle, what: string?): any
 	assert(handle.done, `{what or "call"} did not finish`)
 	assert(handle.ok, `{what or "call"} failed: {tostring(handle.result)}`)
+	return unwrap(handle.result, what or "call", 2)
 end
 
---- Asserts a handle finished with an error containing `pattern`.
+--- Asserts a handle finished with a thrown error containing `pattern`.
 function helpers.failed(handle: Handle, pattern: string?)
 	assert(handle.done, "call did not finish")
 	assert(not handle.ok, `expected failure, got {tostring(handle.result)}`)
@@ -93,6 +109,29 @@ function helpers.failed(handle: Handle, pattern: string?)
 			`expected error containing "{pattern}", got: {tostring(handle.result)}`
 		)
 	end
+end
+
+--- Asserts a handle finished (without throwing) with a failed Result of
+--- `error_type`; returns the error for field checks.
+function helpers.err(handle: Handle, error_type: string): any
+	assert(handle.done, "call did not finish")
+	assert(handle.ok, `expected a failed result, call threw: {tostring(handle.result)}`)
+	assert(result.is(handle.result), `expected a Result, got {tostring(handle.result)}`)
+	assert(not handle.result.success, `expected a failed result, got success`)
+	local err = handle.result.error
+	assert(err.type == error_type, `expected a "{error_type}" error, got "{tostring(err.type)}": {tostring(err)}`)
+	return err
+end
+
+--- Calls `fn` and asserts it threw an error table of `error_type`; returns it.
+function helpers.threw(fn: () -> ...any, error_type: string): any
+	local ok, err = pcall(fn)
+	assert(not ok, "expected the call to throw")
+	assert(
+		type(err) == "table" and err.type == error_type,
+		`expected a thrown "{error_type}" error, got: {tostring(err)}`
+	)
+	return err
 end
 
 --- Steps the scheduler `seconds` times by one second (keeps autosave loops alive).

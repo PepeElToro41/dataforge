@@ -1,3 +1,4 @@
+local errors = require "./errors"
 local types = require "./types"
 
 export type Counter = types.Counter
@@ -74,7 +75,9 @@ function utils.uuid(): string
 	return table.concat(chars)
 end
 
-function utils.retry<T>(config: types.RetryConfig, callback: () -> T): T
+--- Calls `callback` up to `retry_attempts` times with exponential backoff.
+--- Returns the result, or false and the last error once every attempt failed.
+local function retry<T>(config: types.RetryConfig, callback: () -> T): (boolean, T | any)
 	local last_error: any = nil
 	local attempts = config.retry_attempts
 	local base = config.retry_base
@@ -82,14 +85,45 @@ function utils.retry<T>(config: types.RetryConfig, callback: () -> T): T
 	for attempt = 1, attempts do
 		local ok, result = pcall(callback)
 		if ok then
-			return result
+			return true, result
 		end
 		last_error = result
 		if attempt < attempts then
 			config._scheduler.wait(base * 2 ^ (attempt - 1))
 		end
 	end
-	error(last_error, 0)
+	return false, last_error
+end
+
+--- `datastore.get_async(key)` under the retry policy. Throws a `roblox`
+--- error once every attempt failed.
+function utils.get_async(config: types.RetryConfig, datastore: types.DatastoreHandle, key: string): any?
+	local ok, result = retry(config, function()
+		return datastore.get_async(key)
+	end)
+	if not ok then
+		error(errors.roblox("get_async", datastore.name, key, result), 0)
+	end
+	return result
+end
+
+--- `datastore.update_async(key, transform, user_ids)` under the retry policy.
+--- Throws a `roblox` error once every attempt failed. `transform` must not
+--- throw: whatever it throws counts as a storage failure and is retried.
+function utils.update_async(
+	config: types.RetryConfig,
+	datastore: types.DatastoreHandle,
+	key: string,
+	transform: (old: any?) -> any?,
+	user_ids: { number }?
+): any?
+	local ok, result = retry(config, function()
+		return datastore.update_async(key, transform, user_ids)
+	end)
+	if not ok then
+		error(errors.roblox("update_async", datastore.name, key, result), 0)
+	end
+	return result
 end
 
 function utils.counter(): Counter

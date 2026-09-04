@@ -42,12 +42,14 @@ local Players = game:GetService("Players")
 Players.PlayerAdded:Connect(function(player)
 	local key = `player_{player.UserId}`
 
-	-- yields until the session lock is taken; throws on timeout or storage error
-	local ok, profile = pcall(store.load, store, key, { player.UserId })
-	if not ok then
+	-- yields until the session lock is taken; fails on timeout or storage error
+	local result = store:load(key, { player.UserId })
+	if not result.success then
+		warn(`load failed for {key}: {result.error.message}`) -- result.error.type: "timeout", "roblox", ...
 		player:Kick("Could not load your data, please rejoin.")
 		return
 	end
+	local profile = result.value
 
 	-- the profile closes on its own if another server steals the key
 	profile:on_lock_lost(function()
@@ -59,6 +61,8 @@ end)
 ```
 
 `store:load` acquires a session lock on the key. While this profile is open no other server can load it; a server that crashes without unloading leaves a lock that expires after `lock_ttl` (60 seconds by default). `lock_ttl`, `load_timeout` and the other timings are set on the store config; see [Store config](../api/store#config).
+
+Every call that can fail returns a `Result` like this one: `{ success = true, value = ... }` or `{ success = false, error = { type, message, ... } }`. When you would rather throw, `result:unwrap()` returns the value or raises the error table. See [Errors](../api/errors) for every error type and its data.
 
 ## Read and update
 
@@ -78,7 +82,7 @@ profile:update(function(data)
 end)
 ```
 
-Changes are written on the next autosave (every `autosave_interval`, default 30 seconds), on `save()` and on `unload()`.
+`update` returns `Ok(true)` when the data changed and `Ok(false)` when the callback declined; it fails with `profile_closed` once the profile is closed. Changes are written on the next autosave (every `autosave_interval`, default 30 seconds), on `save()` and on `unload()`.
 
 ## Unload
 

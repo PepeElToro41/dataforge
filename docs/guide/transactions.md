@@ -5,7 +5,7 @@ A transaction updates any set of profiles atomically: either every participant e
 ## Usage
 
 ```luau
-local committed = dataforge.transaction({ player, guild }, function(ctx)
+local result = dataforge.transaction({ player, guild }, function(ctx)
 	local p = ctx:get(player)
 	local g = ctx:get(guild)
 
@@ -16,10 +16,20 @@ local committed = dataforge.transaction({ player, guild }, function(ctx)
 	ctx:set(player, { coins = p.coins - 30 })
 	ctx:set(guild, { bank = g.bank + 30 })
 end)
+
+if not result.success then
+	-- result.error.type == "tx_aborted": result.error.cause says which participant failed and why
+	warn(result.error.message)
+elseif result.value then
+	print("committed")
+else
+	print("cancelled")
+end
 ```
 
-- Returns `true` when committed, `false` when the callback cancelled.
-- Throws when the transaction was **aborted** (a participant lost its lock, storage failed, ...).
+- `Ok(true)` when committed, `Ok(false)` when the callback cancelled.
+- `Err(tx_aborted)` when the transaction was **aborted**: its `cause` is the failing participant's error (`lock_lost` with the thief's lock, `tx_lock_lost`, `roblox`, ...), or `nil` when another server resolved the marker as aborted first. Closed or released participants give `Err(profile_closed)` / `Err(not_locked)`. See [Errors](../api/errors).
+- Misuse and errors thrown by the callback still throw.
 - A transaction that changes only one profile is a plain write, no marker involved.
 
 Every store also has a positional shorthand for its own profiles:
@@ -27,7 +37,7 @@ Every store also has a positional shorthand for its own profiles:
 ```luau
 store:transaction({ a, b }, function(data)
 	return { { coins = data[1].coins - 5 }, { coins = data[2].coins + 5 } }
-end)
+end):unwrap()
 ```
 
 ::: warning Lockless profiles are locked during a transaction

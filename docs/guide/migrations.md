@@ -37,8 +37,10 @@ local store = dataforge.create_store {
 
 ## Old servers and new records
 
-A record carries the list of migrations applied to it. A lockless profile whose store declares *fewer* migrations than the record lists refuses to flush it: `save` throws with `was written by a newer server`, keeping the queue. During a rolling deploy this means old servers stop writing shared keys that new servers have already upgraded, instead of corrupting them.
+A record carries the list of migrations applied to it. A lockless profile whose store declares *fewer* migrations than the record lists refuses to flush it: `save` fails with an `outdated` error (carrying both migration lists), keeping the queue. During a rolling deploy this means old servers stop writing shared keys that new servers have already upgraded, instead of corrupting them.
+
+A locked `load`, a lockless `fetch` and a `peek` fail with `migration_mismatch` when the record's list does not prefix-match the declared one: either a name differs (`index`, `expected`, `actual`) or the record lists more migrations than declared. The lock taken by a failed `load` is given back.
 
 ## When migrations fail
 
-If an `apply` throws, the load fails and the record is left as it was. Nothing is written until the migration succeeds.
+If an `apply` throws, the error propagates as is (it is your code, not wrapped in a `Result`), the load fails and the record is left as it was. Nothing is written until the migration succeeds.

@@ -28,7 +28,7 @@ TEST("peek profile", function()
 	CASE("missing key resolves to the template without writing", function()
 		local store = helpers.make_store(hook, scheduler)
 		local peek = helpers.sync(scheduler, function()
-			return store:peek("k")
+			return store:peek "k"
 		end)
 		CHECK(peek.kind == "peek" and peek.key == "k")
 		CHECK(peek:get_data().coins == 0 and peek._data == peek:get_data())
@@ -43,7 +43,7 @@ TEST("peek profile", function()
 		hook.data[helpers.STORE] = { k = { data = { coins = 8 }, migrations = {} } }
 		local store = helpers.make_store(hook, scheduler)
 		local peek = helpers.sync(scheduler, function()
-			return store:peek("k")
+			return store:peek "k"
 		end)
 		CHECK(peek:get_data().coins == 8)
 	end)
@@ -54,23 +54,23 @@ TEST("peek profile", function()
 			return store:load("k", {})
 		end)
 		helpers.sync(scheduler, function()
-			profile:update(helpers.set(5))
-			profile:save()
+			profile:update(helpers.set(5)):unwrap()
+			profile:save():unwrap()
 		end)
 
 		local other = helpers.make_store(helpers.server(hook), scheduler)
 		local peek = helpers.sync(scheduler, function()
-			return other:peek("k")
+			return other:peek "k"
 		end)
 		CHECK(peek.lock ~= nil)
 		CHECK(peek.lock.id == hook.job_id() and peek.lock.tx == nil)
 		CHECK(peek:get_data().coins == 5)
 
 		helpers.sync(scheduler, function()
-			profile:release()
+			profile:release():unwrap()
 		end)
 		helpers.sync(scheduler, function()
-			peek:refresh()
+			peek:refresh():unwrap()
 		end)
 		CHECK(peek.lock == nil)
 		CHECK(profile.open and store.profiles.k == profile)
@@ -82,14 +82,14 @@ TEST("peek profile", function()
 			return store:load("k", {})
 		end)
 		local peek = helpers.sync(scheduler, function()
-			return store:peek("k")
+			return store:peek "k"
 		end)
 		CHECK(peek:get_data().coins == 0)
 		local before_reads, before_writes = reads "k", writes "k"
 
 		helpers.sync(scheduler, function()
-			profile:update(helpers.set(3))
-			profile:save()
+			profile:update(helpers.set(3)):unwrap()
+			profile:save():unwrap()
 		end)
 		local data = helpers.sync(scheduler, function()
 			return peek:refresh()
@@ -113,7 +113,7 @@ TEST("peek profile", function()
 			},
 		})
 		local peek = helpers.sync(scheduler, function()
-			return store:peek("k")
+			return store:peek "k"
 		end)
 		CHECK(peek:get_data().items ~= nil)
 		CHECK(#peek.migrations == 1 and peek.migrations[1] == "items")
@@ -124,12 +124,15 @@ TEST("peek profile", function()
 
 	CASE("missing key lists every declared migration", function()
 		local store = helpers.make_store(hook, scheduler, {
-			migrations = { { name = "a", apply = function(data: any)
-				return data
-			end } },
+			migrations = { {
+				name = "a",
+				apply = function(data: any)
+					return data
+				end,
+			} },
 		})
 		local peek = helpers.sync(scheduler, function()
-			return store:peek("k")
+			return store:peek "k"
 		end)
 		CHECK(#peek.migrations == 1 and peek.migrations[1] == "a")
 	end)
@@ -138,10 +141,30 @@ TEST("peek profile", function()
 		hook.data[helpers.STORE] = { k = { data = { coins = 2 }, migrations = { "newer" } } }
 		local store = helpers.make_store(hook, scheduler)
 		local handle = helpers.run(scheduler, function()
-			return store:peek("k")
+			return store:peek "k"
 		end)
-		helpers.failed(handle, "failed to apply migrations")
+		local err = helpers.err(handle, "migration_mismatch")
+		CHECK(err.key == "k" and err.index == nil)
+		CHECK(#err.applied == 1 and err.applied[1] == "newer" and #err.declared == 0)
+		CHECK(string.find(tostring(err), "failed to apply migrations", 1, true) ~= nil)
 		CHECK(writes "k" == 0)
+	end)
+
+	CASE("refresh fails with roblox after the retries and keeps the snapshot", function()
+		hook.data[helpers.STORE] = { k = { data = { coins = 8 }, migrations = {} } }
+		local store = helpers.make_store(hook, scheduler, { retry_attempts = 1 })
+		local peek = helpers.sync(scheduler, function()
+			return store:peek "k"
+		end)
+		hook:fail_next(helpers.STORE, "k", "get_async", "before", "down")
+		local err = helpers.err(
+			helpers.run(scheduler, function()
+				return peek:refresh()
+			end),
+			"roblox"
+		)
+		CHECK(err.op == "get_async" and err.key == "k" and err.cause == "down")
+		CHECK(peek:get_data().coins == 8)
 	end)
 
 	CASE("exposes a pending marker as stored", function()
@@ -149,7 +172,7 @@ TEST("peek profile", function()
 		hook.data[helpers.STORE] = { k = { data = { coins = 1 }, migrations = {}, pending = pending } }
 		local store = helpers.make_store(hook, scheduler)
 		local peek = helpers.sync(scheduler, function()
-			return store:peek("k")
+			return store:peek "k"
 		end)
 		CHECK(peek:get_data().coins == 1)
 		CHECK(peek.pending ~= nil and peek.pending.tx_id == "x-1")
@@ -159,7 +182,7 @@ TEST("peek profile", function()
 	CASE("cannot join a transaction", function()
 		local store = helpers.make_store(hook, scheduler)
 		local peek = helpers.sync(scheduler, function()
-			return store:peek("k")
+			return store:peek "k"
 		end)
 		local handle = helpers.run(scheduler, function()
 			return store:transaction({ peek :: any }, function(datas)
@@ -170,15 +193,15 @@ TEST("peek profile", function()
 		CHECK(writes "k" == 0)
 	end)
 
-	CASE("throws once the store is closed", function()
+	CASE("fails once the store is closed", function()
 		local store = helpers.make_store(hook, scheduler)
 		helpers.sync(scheduler, function()
 			store:close()
 		end)
 		local handle = helpers.run(scheduler, function()
-			return store:peek("k")
+			return store:peek "k"
 		end)
-		helpers.failed(handle, "store is closed")
+		CHECK(helpers.err(handle, "store_closed").store == store)
 	end)
 end)
 

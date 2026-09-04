@@ -1,4 +1,6 @@
+local errors = require "../errors"
 local mutex = require "../mutex"
+local result = require "../result"
 local types = require "../types"
 local utils = require "../utils"
 local common = require "./common"
@@ -23,11 +25,16 @@ local function adquire_lock(load_options: LoadOptions): types.DataRecord
 	local scheduler = config._scheduler
 
 	local deadline = scheduler.now() + config.load_timeout
+	-- the last lock seen on the record, reported when the load times out
+	local last_lock: types.Lock? = nil
 
 	while true do
 		local now = scheduler.now()
-		local lock_applied = utils.retry(config, function()
-			return datastore.update_async(key, function(old: types.DataRecord?): types.DataRecord?
+		local lock_applied = utils.update_async(
+			config,
+			datastore,
+			key,
+			function(old: types.DataRecord?): types.DataRecord?
 				if common.is_locked_for(old :: types.DataRecord, job_id, now) then
 					return nil
 				end
@@ -42,22 +49,23 @@ local function adquire_lock(load_options: LoadOptions): types.DataRecord
 						expires = now + config.lock_ttl,
 					},
 				}
-			end, user_ids)
-		end) :: types.DataRecord
+			end,
+			user_ids
+		) :: types.DataRecord
 
 		if common.is_lock_owned(lock_applied, job_id) then
 			return lock_applied
 		end
+		last_lock = if lock_applied then lock_applied.lock else nil
 
 		while true do
 			if scheduler.now() >= deadline then
-				error(`datastore: timed out loading "{key}" (session locked by another server)`)
+				error(errors.timeout(key, last_lock), 0)
 			end
 			scheduler.wait(config.load_poll)
 
-			local current = utils.retry(config, function()
-				return datastore.get_async(key)
-			end) :: types.DataRecord?
+			local current = utils.get_async(config, datastore, key) :: types.DataRecord?
+			last_lock = if current then current.lock else nil
 
 			if not common.is_locked_for(current, job_id, scheduler.now()) then
 				break
@@ -85,9 +93,11 @@ local function run_autosave_loop(self: Profile)
 
 			-- a failed write must not kill the loop: the next tick retries, and
 			-- `write_data_record` gives the lock up after a full ttl of failures
-			local ok, err = utils.try(self.save, self)
+			local ok, res = utils.try(self.save, self)
 			if not ok then
-				config._hook.warn(`datastore: autosave failed for "{self.key}": {tostring(err)}`)
+				config._hook.warn(`datastore: autosave failed for "{self.key}": {tostring(res)}`)
+			elseif not res.success then
+				config._hook.warn(`datastore: autosave failed for "{self.key}": {tostring(res.error)}`)
 			end
 		end
 	end)
@@ -117,7 +127,7 @@ local function process_lock_lost(self: Profile)
 		return
 	end
 	self.open = false
-	self._mutex:close(`datastore: profile "{self.key}" lost its session lock`)
+	self._mutex:close(errors.profile_closed(self, "lock_lost"))
 	fire_hooks(self, self._hooks.lock_lost)
 	fire_hooks(self, self._hooks.closed)
 end
@@ -127,7 +137,11 @@ type WriteOptions = {
 	pending: types.Pending?,
 }
 
-local function write_data_record(self: Profile, options: WriteOptions): boolean
+--- Writes the data (and `pending`, if any) under our session lock, refreshing
+--- or releasing it. Returns true when written; false and the lock now on the
+--- record (nil when none) when the lock is not ours any more, in which case
+--- the profile is closed. Throws a `roblox` error when storage fails.
+local function write_data_record(self: Profile, options: WriteOptions): (boolean, types.Lock?)
 	local config = self.config
 	local scheduler = config._scheduler
 	local datastore = self._datastore
@@ -135,11 +149,13 @@ local function write_data_record(self: Profile, options: WriteOptions): boolean
 	local job_id = config._hook.job_id()
 
 	-- set by the transform: whether the write went through (the transform may
-	-- run more than once when the storage retries it)
+	-- run more than once when the storage retries it), and the lock it found
 	local applied = false
+	local seen_lock: types.Lock? = nil
 
 	local function transform(old: any?): DataRecord?
 		applied = false
+		seen_lock = if old then old.lock else nil
 		if not common.is_lock_owned(old, job_id) then
 			return nil
 		end
@@ -163,9 +179,7 @@ local function write_data_record(self: Profile, options: WriteOptions): boolean
 	end
 
 	local success, err = pcall(function()
-		utils.retry(config, function()
-			return datastore.update_async(self.key, transform, self.user_ids)
-		end)
+		utils.update_async(config, datastore, self.key, transform, self.user_ids)
 	end)
 
 	if not success then
@@ -180,7 +194,7 @@ local function write_data_record(self: Profile, options: WriteOptions): boolean
 	if not applied then
 		-- the transform bailed out: the lock is not ours any more
 		process_lock_lost(self)
-		return false
+		return false, seen_lock
 	end
 
 	self.last_write = now
@@ -205,23 +219,25 @@ local function release_lock(load_options: LoadOptions)
 	local job_id = config._hook.job_id()
 
 	local ok, err = utils.try(function()
-		utils.retry(config, function()
-			return load_options._datastore.update_async(load_options.key, function(old: DataRecord?): DataRecord?
-				if not common.is_lock_owned(old, job_id) then
-					return nil
-				end
-				local record = old :: DataRecord
-				return {
-					data = record.data,
-					pending = record.pending,
-					migrations = record.migrations,
-					lock = nil,
-				}
-			end, load_options.user_ids)
-		end)
+		utils.update_async(config, load_options._datastore, load_options.key, function(old: DataRecord?): DataRecord?
+			if not common.is_lock_owned(old, job_id) then
+				return nil
+			end
+			local record = old :: DataRecord
+			return {
+				data = record.data,
+				pending = record.pending,
+				migrations = record.migrations,
+				lock = nil,
+			}
+		end, load_options.user_ids)
 	end)
 	if not ok then
-		config._hook.warn(`datastore: could not release the lock of "{load_options.key}" after a failed load (it will expire): {tostring(err)}`)
+		config._hook.warn(
+			`datastore: could not release the lock of "{load_options.key}" after a failed load (it will expire): {tostring(
+				err
+			)}`
+		)
 	end
 end
 
@@ -253,15 +269,15 @@ local function resolve_loaded(load_options: LoadOptions, record: DataRecord): (a
 		end
 		dirty = true
 	else
-		local result = apply_migrations(data, record.migrations or {}, migrations)
-		if not result.success then
-			error(`datastore: failed to apply migrations for "{load_options.key}": {result.err}`)
+		local migrated = apply_migrations(load_options.key, data, record.migrations or {}, migrations)
+		if not migrated.success then
+			error(migrated.err, 0)
 		end
 
-		data = result.result
-		new_migrations = result.new_migrations
+		data = migrated.result
+		new_migrations = migrated.new_migrations
 
-		if result.applied then
+		if migrated.applied then
 			dirty = true
 		end
 	end
@@ -279,7 +295,9 @@ local function adquire_and_resolve(load_options: LoadOptions): (any, { string },
 	local ok, data, new_migrations, dirty = pcall(resolve_loaded, load_options, record)
 	if not ok then
 		local err = data
-		config._hook.warn(`datastore: load of "{load_options.key}" failed after taking its lock, releasing it: {tostring(err)}`)
+		config._hook.warn(
+			`datastore: load of "{load_options.key}" failed after taking its lock, releasing it: {tostring(err)}`
+		)
 		release_lock(load_options)
 		error(err, 0)
 	end
@@ -297,7 +315,7 @@ end
 
 local function assert_locked(self: Profile)
 	if not self.is_locked then
-		error(`datastore: profile "{self.key}" does not hold its session lock`, 3)
+		error(errors.not_locked(self), 0)
 	end
 end
 
@@ -343,22 +361,26 @@ function profile.get_data(self: Profile)
 end
 
 --- Applies `dispatcher` to the current data. Returning nil or false leaves the
---- data untouched (returns false); anything else becomes the new data and is
---- persisted on the next save. Waits for any in-flight save on the mutex.
-function profile.update(self: Profile, dispatcher: (any) -> any): boolean
-	common.assert_open(self)
-	assert_locked(self)
-
-	return self._mutex:with(function()
-		-- a release may have run while this call waited on the mutex
+--- data untouched (Ok(false)); anything else becomes the new data and is
+--- persisted on the next save (Ok(true)). Waits for any in-flight save on the
+--- mutex. Fails with `profile_closed` / `not_locked`; an error thrown by the
+--- dispatcher propagates as is.
+function profile.update(self: Profile, dispatcher: (any) -> any): types.Result<boolean>
+	return result.capture(function()
+		common.assert_open(self)
 		assert_locked(self)
-		local result = dispatcher(self._data)
-		if result == nil or result == false then
-			return false
-		end
-		set_data(self, result)
-		self._dirty = true
-		return true
+
+		return self._mutex:with(function()
+			-- a release may have run while this call waited on the mutex
+			assert_locked(self)
+			local new = dispatcher(self._data)
+			if new == nil or new == false then
+				return false
+			end
+			set_data(self, new)
+			self._dirty = true
+			return true
+		end)
 	end)
 end
 
@@ -382,61 +404,81 @@ function profile.on_lock_lost(self: Profile, callback: () -> ())
 	table.insert(self._hooks.lock_lost.hooks, callback)
 end
 
-function profile.save(self: Profile)
-	common.assert_open(self)
-	assert_locked(self)
-	-- before the mutex so hooks can still run updates that land in this save
-	fire_hooks(self, self._hooks.save)
-	common.assert_open(self)
-	assert_locked(self)
-	self._mutex:with(function()
-		-- without the lock the write would be cancelled and wrongly read as lost
+--- Writes the data, refreshing the session lock. Fails with `profile_closed`,
+--- `not_locked`, `roblox`, or `lock_lost` (another server took the key; the
+--- profile is closed).
+function profile.save(self: Profile): types.Result<nil>
+	return result.capture(function()
+		common.assert_open(self)
 		assert_locked(self)
-		write_data_record(self, { release = false })
+		-- before the mutex so hooks can still run updates that land in this save
+		fire_hooks(self, self._hooks.save)
+		common.assert_open(self)
+		assert_locked(self)
+		self._mutex:with(function()
+			-- without the lock the write would be cancelled and wrongly read as lost
+			assert_locked(self)
+			local written, lock = write_data_record(self, { release = false })
+			if not written then
+				error(errors.lock_lost(self, lock), 0)
+			end
+		end)
+		return nil
 	end)
 end
 
 --- Writes the data and gives the session lock back. The profile stays open
---- (another server may load the key meanwhile); `update` and `save` throw
---- until `readquire`. No-op when already released.
-function profile.release(self: Profile)
-	common.assert_open(self)
-	if not self.is_locked then
-		return
-	end
-	self._mutex:with(function()
-		if not self.open or not self.is_locked then
-			return
+--- (another server may load the key meanwhile); `update` and `save` fail with
+--- `not_locked` until `readquire`. No-op when already released. Fails with
+--- `profile_closed`, `roblox` (the lock stays on the record, `is_locked`
+--- stays true) or `lock_lost` (the profile is closed).
+function profile.release(self: Profile): types.Result<nil>
+	return result.capture(function()
+		common.assert_open(self)
+		if not self.is_locked then
+			return nil
 		end
-		-- false: the lock was not ours any more, `process_lock_lost` closed the profile.
-		-- A storage error propagates; the lock is still on the record, so `is_locked` stays.
-		if write_data_record(self, { release = true }) then
+		self._mutex:with(function()
+			-- an unload queued behind this call has flipped `open`: its own write
+			-- gives the lock back
+			if not self.open or not self.is_locked then
+				return
+			end
+			local written, lock = write_data_record(self, { release = true })
+			if not written then
+				error(errors.lock_lost(self, lock), 0)
+			end
 			self.is_locked = false
-		end
+		end)
+		return nil
 	end)
 end
 
 --- Takes the session lock again, waiting for a holder like `load` does, and
 --- adopts the stored record (resolved pending, migrations) as the current
---- data. Throws on timeout, leaving the profile open and released. No-op when
---- already locked.
-function profile.readquire(self: Profile)
-	common.assert_open(self)
-	if self.is_locked then
-		return
-	end
-	self._mutex:with(function()
+--- data. Fails with `timeout` (the profile stays open and released),
+--- `profile_closed`, `roblox`, `migration_mismatch` or `tx_marker_invalid`.
+--- No-op when already locked.
+function profile.readquire(self: Profile): types.Result<nil>
+	return result.capture(function()
 		common.assert_open(self)
 		if self.is_locked then
-			return
+			return nil
 		end
-		local data, new_migrations, dirty = adquire_and_resolve(load_options_of(self))
+		self._mutex:with(function()
+			common.assert_open(self)
+			if self.is_locked then
+				return
+			end
+			local data, new_migrations, dirty = adquire_and_resolve(load_options_of(self))
 
-		self.migrations = new_migrations
-		set_data(self, data)
-		self._dirty = dirty
-		self.last_write = self.config._scheduler.now()
-		self.is_locked = true
+			self.migrations = new_migrations
+			set_data(self, data)
+			self._dirty = dirty
+			self.last_write = self.config._scheduler.now()
+			self.is_locked = true
+		end)
+		return nil
 	end)
 end
 
@@ -452,9 +494,10 @@ function profile.unload(self: Profile)
 
 	self.open = false
 	self._mutex:lock()
-	self._mutex:close(`datastore: profile "{self.key}" is closed`)
+	self._mutex:close(errors.profile_closed(self, "unloaded"))
 	local ok, err = utils.try(function()
-		-- an already released profile has nothing on the record to give back
+		-- an already released profile has nothing on the record to give back;
+		-- a lost lock (false) has nothing to give back either
 		if self.is_locked then
 			write_data_record(self, { release = true })
 		end

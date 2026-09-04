@@ -29,7 +29,7 @@ Data from the last read, frozen. The template when the key does not exist. Migra
 ### `peek:refresh()`
 
 ```luau
-(self: PeekProfile<T>) -> T
+(self: PeekProfile<T>) -> Result<T>
 ```
 
-Calls `GetAsync` again and replaces `lock`, `pending`, `migrations` and the data. Returns the new data. Yields.
+Calls `GetAsync` again and replaces `lock`, `pending`, `migrations` and the data. Returns the new data. Yields. Fails with `roblox` or `migration_mismatch`, leaving the previous snapshot in place.

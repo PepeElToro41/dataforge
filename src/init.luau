@@ -18,6 +18,8 @@ export type Profile<T = any> = types.Profile<T>
 export type LocklessProfile<T = any> = types.LocklessProfile<T>
 export type ProfileBase<T = any> = types.ProfileBase<T>
 export type PeekProfile<T = any> = types.PeekProfile<T>
+export type Result<T> = types.Result<T>
+export type Error = types.Error
 
 local dataforge = {}
 
@@ -26,12 +28,14 @@ function dataforge.create_store<T>(config: Config<T>): Store<T>
 end
 
 --- Atomically updates any set of profiles, across stores and mixing locked and
---- lockless ones.
+--- lockless ones. Ok(false) when `process` returns false, Ok(true) when
+--- committed. Fails with `tx_aborted` (see its `cause`), `profile_closed`,
+--- `not_locked`, or what flushing a lockless participant raised.
 function dataforge.transaction(
 	profiles: Array<ProfileBase>,
 	process: (ctx: TxContext) -> boolean?,
 	config: TransactionConfig?
-): boolean
+): Result<boolean>
 	local first = profiles[1]
 	local defaults: TransactionConfig? = if first
 		then {

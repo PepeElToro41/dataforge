@@ -83,3 +83,19 @@ type TxOutcome = "committed" | "aborted"
 ### `Store<T>` ★
 
 See [Store](./store).
+
+## Errors
+
+### `Result<T>` ★
+
+```luau
+type Result<T> = Ok<T> | Err
+type Ok<T> = { success: true, value: T, unwrap: (self) -> T }
+type Err = { success: false, error: Error, unwrap: (self) -> never }
+```
+
+What every fallible call returns. See [Errors](./errors).
+
+### `Error` ★
+
+Union of every error table (`RobloxError`, `TimeoutError`, `LockLostError`, `NotLockedError`, `ProfileLockedError`, `TxLockLostError`, `OutdatedError`, `NotFetchedError`, `ProfileClosedError`, `MigrationMismatchError`, `TxAbortedError`, `TxMarkerInvalidError`, `StoreClosedError`, `AlreadyLoadedError`), each with a literal `type`. See [Errors](./errors).

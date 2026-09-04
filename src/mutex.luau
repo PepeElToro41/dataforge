@@ -24,7 +24,7 @@ end
 
 function mutex.lock(self: Mutex)
 	if self._closed then
-		error(self._closed, 2)
+		error(self._closed, 0)
 	end
 	if not self._locked then
 		self._locked = true
@@ -34,7 +34,7 @@ function mutex.lock(self: Mutex)
 	-- resumed with a reason only when the mutex was closed while waiting
 	local rejection = coroutine.yield()
 	if rejection ~= nil then
-		error(rejection, 2)
+		error(rejection, 0)
 	end
 end
 
@@ -59,9 +59,9 @@ function mutex.unlock(self: Mutex)
 	self.scheduler.spawn(next_waiter)
 end
 
---- Rejects every current and future lock with `reason`. Idempotent: a second
---- close keeps the first reason.
-function mutex.close(self: Mutex, reason: string)
+--- Rejects every current and future lock with `reason` (an `Error` table,
+--- thrown as is). Idempotent: a second close keeps the first reason.
+function mutex.close(self: Mutex, reason: any)
 	if self._closed then
 		return
 	end

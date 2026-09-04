@@ -54,7 +54,7 @@ TEST("migrations (session-locked)", function()
 		CHECK(profile:get_data().coins == 0 and profile:get_data().items == nil)
 		CHECK(profile.migrations[1] == "add_items" and profile.migrations[2] == "double_coins")
 		helpers.sync(scheduler, function()
-			profile:save()
+			profile:save():unwrap()
 		end)
 		local record = helpers.record(hook, "k1")
 		CHECK(record.migrations[1] == "add_items" and record.migrations[2] == "double_coins")
@@ -121,14 +121,18 @@ TEST("migrations (session-locked)", function()
 		local handle = helpers.run(scheduler, function()
 			return store:load("k1", {})
 		end)
-		helpers.failed(handle, "migration mismatch")
+		local err = helpers.err(handle, "migration_mismatch")
+		CHECK(err.key == "k1" and err.index == 1)
+		CHECK(err.actual == "something_else" and err.expected == "add_items")
+		CHECK(#err.applied == 1 and #err.declared == 2 and err.declared[2] == "double_coins")
+		CHECK(string.find(tostring(err), "migration mismatch", 1, true) ~= nil)
 		CHECK(#ran == 0)
 		CHECK(store:get_loaded "k1" == nil)
 		-- the key can be loaded again by this store (no "already loaded")
 		local again = helpers.run(scheduler, function()
 			return store:load("k1", {})
 		end)
-		helpers.failed(again, "migration mismatch")
+		helpers.err(again, "migration_mismatch")
 	end)
 
 	CASE("a record with more migrations than declared fails the load", function()
@@ -137,23 +141,46 @@ TEST("migrations (session-locked)", function()
 		local handle = helpers.run(scheduler, function()
 			return store:load("k1", {})
 		end)
-		helpers.failed(handle, "applied migrations")
+		local err = helpers.err(handle, "migration_mismatch")
+		CHECK(err.index == nil and err.expected == nil and err.actual == nil)
+		CHECK(#err.applied == 3 and #err.declared == 2)
+		CHECK(string.find(tostring(err), "applied migrations", 1, true) ~= nil)
 		CHECK(#ran == 0)
 	end)
 
 	CASE("a failed load leaves no lock behind", function()
 		seed { data = { coins = 3 }, migrations = { "wrong" } }
 		local store = helpers.make_store(hook, scheduler, { migrations = migrations() })
-		helpers.failed(
+		helpers.err(
 			helpers.run(scheduler, function()
 				return store:load("k1", {})
 			end),
-			"migration mismatch"
+			"migration_mismatch"
 		)
 		-- the data is untouched and nobody owns the key
 		local record = helpers.record(hook, "k1")
 		CHECK(record.data.coins == 3)
 		CHECK(record.lock == nil, "lock left behind by a failed load")
+	end)
+
+	CASE("a migration that throws propagates the raw error and leaves no lock behind", function()
+		seed { data = { coins = 3 }, migrations = {} }
+		local store = helpers.make_store(hook, scheduler, {
+			migrations = { {
+				name = "broken",
+				apply = function()
+					error "migration broke"
+				end,
+			} },
+		})
+		local handle = helpers.run(scheduler, function()
+			return store:load("k1", {})
+		end)
+		helpers.failed(handle, "migration broke")
+		CHECK(type(handle.result) == "string")
+		CHECK(store:get_loaded "k1" == nil)
+		local record = helpers.record(hook, "k1")
+		CHECK(record.data.coins == 3 and record.lock == nil)
 	end)
 
 	CASE("a committed pending is migrated on load", function()
@@ -206,7 +233,7 @@ TEST("migrations (lockless)", function()
 		local store = helpers.make_store(hook, scheduler, { migrations = migrations() })
 		local g = store:get_lockless("k1", {})
 		helpers.sync(scheduler, function()
-			g:save()
+			g:save():unwrap()
 		end)
 		local record = helpers.record(hook, "k1")
 		CHECK(record.data.coins == 6 and record.data.items ~= nil)
@@ -224,7 +251,7 @@ TEST("migrations (lockless)", function()
 				CHECK(data.items ~= nil)
 				return { coins = data.coins + 1, items = data.items }
 			end)
-			g:save()
+			g:save():unwrap()
 		end)
 		-- (3 * 2) + 1, not (3 + 1) * 2
 		CHECK(helpers.record(hook, "k1").data.coins == 7)
@@ -235,13 +262,13 @@ TEST("migrations (lockless)", function()
 		local store = helpers.make_store(hook, scheduler, { migrations = migrations() })
 		local g = store:get_lockless("k1", {})
 		helpers.sync(scheduler, function()
-			g:fetch()
+			g:fetch():unwrap()
 		end)
 		CHECK(#ran == 0 and g:get_data().coins == 0)
 		CHECK(#g.migrations == 2)
 		helpers.sync(scheduler, function()
-			g:update(helpers.add(1))
-			g:save()
+			g:update(helpers.add(1)):unwrap()
+			g:save():unwrap()
 		end)
 		local record = helpers.record(hook, "k1")
 		CHECK(record.data.coins == 1 and #record.migrations == 2)
@@ -252,38 +279,73 @@ TEST("migrations (lockless)", function()
 		local store = helpers.make_store(hook, scheduler, { migrations = migrations() })
 		local g = store:get_lockless("k1", {})
 		helpers.sync(scheduler, function()
-			g:update(helpers.add(1))
+			g:update(helpers.add(1)):unwrap()
 		end)
 		local save = helpers.run(scheduler, function()
-			g:save()
+			return g:save()
 		end)
-		helpers.failed(save, "newer server")
+		local err = helpers.err(save, "outdated")
+		CHECK(err.profile == g)
+		CHECK(#err.record_migrations == 3 and err.record_migrations[3] == "future")
+		CHECK(#err.declared_migrations == 2)
+		CHECK(string.find(tostring(err), "newer server", 1, true) ~= nil)
 		CHECK(g.open)
 		CHECK(#g.queued_updates == 1)
 		CHECK(helpers.record(hook, "k1").data.coins == 3)
 		-- the flush loop keeps failing (warned) and nothing is written
+		local warnings = #hook.warnings
 		scheduler.step(60)
+		CHECK(#hook.warnings > warnings)
 		CHECK(helpers.record(hook, "k1").data.coins == 3)
 		CHECK(g.open)
 	end)
 
 	CASE("a name mismatch fails fetch and save", function()
 		seed { data = { coins = 3 }, migrations = { "wrong" } }
-		local store = helpers.make_store(hook, scheduler, { migrations = migrations(), retry_attempts = 1 })
+		local store = helpers.make_store(hook, scheduler, { migrations = migrations() })
 		local g = store:get_lockless("k1", {})
-		helpers.failed(
+		local err = helpers.err(
 			helpers.run(scheduler, function()
 				return g:fetch()
 			end),
-			"migration mismatch"
+			"migration_mismatch"
 		)
-		helpers.failed(
+		CHECK(err.key == "k1" and err.index == 1 and err.actual == "wrong" and err.expected == "add_items")
+		err = helpers.err(
 			helpers.run(scheduler, function()
-				g:save()
+				return g:save()
 			end),
-			"migration mismatch"
+			"migration_mismatch"
 		)
+		CHECK(err.index == 1 and err.actual == "wrong")
+		-- the transform cancelled the write: not retried as a storage failure
+		CHECK(helpers.ops(hook, helpers.STORE, "k1", "update_async") == 1)
 		CHECK(g.open and not g.fetched)
+		CHECK(helpers.record(hook, "k1").data.coins == 3)
+	end)
+
+	CASE("a migration that throws propagates the raw error on fetch and save", function()
+		seed { data = { coins = 3 }, migrations = {} }
+		local store = helpers.make_store(hook, scheduler, {
+			migrations = { {
+				name = "broken",
+				apply = function()
+					error "migration broke"
+				end,
+			} },
+		})
+		local g = store:get_lockless("k1", {})
+		local fetch = helpers.run(scheduler, function()
+			return g:fetch()
+		end)
+		helpers.failed(fetch, "migration broke")
+		CHECK(type(fetch.result) == "string")
+		local save = helpers.run(scheduler, function()
+			return g:save()
+		end)
+		helpers.failed(save, "migration broke")
+		CHECK(helpers.ops(hook, helpers.STORE, "k1", "update_async") == 1)
+		CHECK(g.open and not g.fetched and not g._mutex:is_locked())
 		CHECK(helpers.record(hook, "k1").data.coins == 3)
 	end)
 end)

@@ -9,7 +9,7 @@ Profile without a session lock, returned by [`store:get_lockless`](./store#store
 | `kind` | `"lockless"` | |
 | `key` | `string` | Datastore key. |
 | `open` | `boolean` | `false` once closed. |
-| `fetched` | `boolean` | Whether the data has been read from storage (by `fetch` or a first flush). `get_data` throws until then. |
+| `fetched` | `boolean` | Whether the data has been read from storage (by `fetch` or a first flush). `get_data` throws `not_fetched` until then. |
 | `queued_updates` | `{ (T) -> T \| false }` | Transforms waiting for the next flush. |
 | `user_ids` | `{ number }` | As passed to `get_lockless`. |
 | `migrations` | `{ string }` | Migration names on the record, once fetched. |
@@ -21,12 +21,12 @@ Profile without a session lock, returned by [`store:get_lockless`](./store#store
 ### `profile:fetch()`
 
 ```luau
-(self: LocklessProfile<T>) -> T
+(self: LocklessProfile<T>) -> Result<T>
 ```
 
 Reads the record with `get_async`, resolves any dangling transaction, runs migrations and returns the data. Marks the profile fetched. Yields.
 
-Throws (and fires `on_lock_lost`, closing the profile) if another server holds an unexpired session lock on the key. Waits while a transaction lock is held.
+Fails with `profile_locked` (and fires `on_lock_lost`, closing the profile) if another server holds an unexpired session lock on the key; the error carries that lock. Also `roblox`, `migration_mismatch`, `tx_marker_invalid`, `profile_closed`. Waits while a transaction lock is held.
 
 ### `profile:get_data()`
 
@@ -34,27 +34,27 @@ Throws (and fires `on_lock_lost`, closing the profile) if another server holds a
 (self: LocklessProfile<T>) -> T
 ```
 
-Local data: the last fetched/flushed value with queued updates applied. Throws if closed or not yet fetched.
+Local data: the last fetched/flushed value with queued updates applied. Throws a `profile_closed` or `not_fetched` error table (a plain accessor, no `Result`).
 
 ### `profile:update(fn)`
 
 ```luau
-(self: LocklessProfile<T>, fn: (T) -> T | false) -> boolean
+(self: LocklessProfile<T>, fn: (T) -> T | false) -> Result<boolean>
 ```
 
-Queues `fn` to run against the **stored** data on the next flush. When the profile is fetched the local data is advanced right away (fires `on_change`). A transform returning `false` or `nil` is not queued. Returns whether it was queued.
+Queues `fn` to run against the **stored** data on the next flush. When the profile is fetched the local data is advanced right away (fires `on_change`). A transform returning `false` or `nil` is not queued. `Ok(true)` when queued, `Ok(false)` otherwise; fails with `profile_closed`. An error thrown by `fn` propagates as is.
 
 `fn` must be **pure**: it is replayed at flush time on whatever is stored, which may differ from the local data.
 
 ### `profile:save()`
 
 ```luau
-(self: LocklessProfile<T>) -> ()
+(self: LocklessProfile<T>) -> Result<nil>
 ```
 
 Flushes the queue: fires `on_save`, then applies every queued transform to the stored data in one `update_async` and refreshes the local data with the result. Marks the profile fetched. Yields.
 
-Throws, keeping the queue, if another server holds a live session lock, or if the record lists more migrations than this store declares (written by a newer server). Neither case is retried.
+Fails, keeping the queue, with `profile_locked` if another server holds a live session lock (the profile is closed), or `outdated` if the record lists more migrations than this store declares (written by a newer server). Neither case is retried. Also `roblox`, `migration_mismatch`, `profile_closed`; an error thrown by a queued transform propagates as is.
 
 The flush loop calls this every `flush_interval` seconds when something is queued.
 

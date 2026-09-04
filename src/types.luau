@@ -61,7 +61,7 @@ export type Config<T = any> = {
 	retry_base: number?,
 }
 
---- Options shared by the retry helper. Both `ResolvedConfig` and
+--- Options shared by the storage retry helpers. Both `ResolvedConfig` and
 --- `ResolvedTransactionConfig` satisfy it.
 export type RetryConfig = {
 	_scheduler: Scheduler,
@@ -139,10 +139,169 @@ export type DataRecord<T = any> = {
 	migrations: { string },
 }
 
+--[[
+	Errors and results
+]]
+
+--- Every runtime failure is one of these tables (see `errors.luau`): `type`
+--- tells them apart, `message` is human readable (`tostring(err)` returns
+--- it), the rest is typed extra data. `profile` / `store` fields are typed
+--- `any` on purpose: naming `ProfileBase` or `Store` here would put them in a
+--- recursive generic group with `Result`, which Luau rejects.
+export type RobloxError = {
+	type: "roblox",
+	message: string,
+	op: "get_async" | "update_async",
+	store: string,
+	key: string,
+	--- the last raw error the storage hook threw
+	cause: any,
+}
+
+export type TimeoutError = {
+	type: "timeout",
+	message: string,
+	key: string,
+	--- the last lock seen on the record while waiting
+	lock: Lock?,
+}
+
+export type LockLostError = {
+	type: "lock_lost",
+	message: string,
+	profile: any,
+	--- the lock now on the record, nil when it has none
+	lock: Lock?,
+}
+
+export type NotLockedError = {
+	type: "not_locked",
+	message: string,
+	profile: any,
+}
+
+export type ProfileLockedError = {
+	type: "profile_locked",
+	message: string,
+	profile: any,
+	--- the live session lock another server holds on the record
+	lock: Lock,
+}
+
+export type TxLockLostError = {
+	type: "tx_lock_lost",
+	message: string,
+	profile: any,
+	--- the transaction lock this profile held
+	expected: Lock,
+	--- the lock now on the record, nil when it has none
+	lock: Lock?,
+}
+
+export type OutdatedError = {
+	type: "outdated",
+	message: string,
+	profile: any,
+	record_migrations: Array<string>,
+	declared_migrations: Array<string>,
+}
+
+export type NotFetchedError = {
+	type: "not_fetched",
+	message: string,
+	profile: any,
+}
+
+export type ProfileClosedError = {
+	type: "profile_closed",
+	message: string,
+	profile: any,
+	reason: "unloaded" | "lock_lost",
+}
+
+export type MigrationMismatchError = {
+	type: "migration_mismatch",
+	message: string,
+	key: string,
+	--- set when a name differs: the record's and the declared migration there
+	index: number?,
+	expected: string?,
+	actual: string?,
+	--- names the record has applied / this server declares
+	applied: Array<string>,
+	declared: Array<string>,
+}
+
+export type TxAbortedError = {
+	type: "tx_aborted",
+	message: string,
+	id: string,
+	--- the failure that made phase 1 give up; nil when the marker was already
+	--- resolved as aborted by another server
+	cause: Error?,
+}
+
+export type TxMarkerInvalidError = {
+	type: "tx_marker_invalid",
+	message: string,
+	id: string,
+	value: any,
+}
+
+export type StoreClosedError = {
+	type: "store_closed",
+	message: string,
+	store: any,
+}
+
+export type AlreadyLoadedError = {
+	type: "already_loaded",
+	message: string,
+	store: any,
+	key: string,
+}
+
+export type Error =
+	| RobloxError
+	| TimeoutError
+	| LockLostError
+	| NotLockedError
+	| ProfileLockedError
+	| TxLockLostError
+	| OutdatedError
+	| NotFetchedError
+	| ProfileClosedError
+	| MigrationMismatchError
+	| TxAbortedError
+	| TxMarkerInvalidError
+	| StoreClosedError
+	| AlreadyLoadedError
+
+export type Ok<T> = {
+	success: true,
+	value: T,
+	--- Returns `value`.
+	unwrap: (self: any) -> T,
+}
+
+export type Err = {
+	success: false,
+	error: Error,
+	--- Throws `error` (the table itself; `tostring` gives its message).
+	--- Typed `any`: Luau cannot call a union of two function types, and this
+	--- keeps `result:unwrap()` callable on `Result<T>` while `success` still
+	--- narrows the union.
+	unwrap: any,
+}
+
+--- What every fallible library call returns. See `result.luau`.
+export type Result<T> = Ok<T> | Err
+
 --- FIFO mutex for coroutines. See `mutex.luau`.
 export type Mutex = {
 	_locked: boolean,
-	_closed: string?,
+	--- The `Error` (a `profile_closed`) every lock is rejected with once closed.
+	_closed: any?,
 	_waiters: { thread },
 	_settlers: { thread },
 
@@ -151,7 +310,7 @@ export type Mutex = {
 	wait_settled: (self: Mutex) -> (),
 	lock: (self: Mutex) -> (),
 	unlock: (self: Mutex) -> (),
-	close: (self: Mutex, reason: string) -> (),
+	close: (self: Mutex, reason: any) -> (),
 	is_locked: (self: Mutex) -> boolean,
 	is_closed: (self: Mutex) -> boolean,
 	with: (self: Mutex, fn: () -> ...any) -> any,
@@ -170,9 +329,9 @@ export type TxPatch = {
 	--- Set once `prepare` succeeded (the record carries `pending`).
 	prepared: boolean,
 
-	--- Phase 1: persist `pending` next to the current data. Returns false when
-	--- the profile no longer owns its lock. May throw.
-	prepare: (pending: Pending) -> boolean,
+	--- Phase 1: persist `pending` next to the current data. Throws an `Error`
+	--- (`lock_lost`, `tx_lock_lost`, `profile_locked`, `roblox`, ...) on failure.
+	prepare: (pending: Pending) -> (),
 	--- Applies the outcome in memory. Called exactly once by the operation.
 	commit: (operation: TxOperation) -> (),
 	abort: (operation: TxOperation) -> (),
@@ -227,11 +386,14 @@ export type ProfileBase<T = any> = {
 	--- Operations waiting for this profile to write a record without `pending`.
 	_cleanup_txs: Array<TxOperation>,
 
-	--- Current data. Throws if the profile is closed or (lockless) not fetched.
+	--- Current data. Throws an `Error` (`profile_closed`, or `not_fetched` for
+	--- a lockless profile) instead of returning a Result: it is a plain accessor.
 	get_data: (self: ProfileBase<T>) -> T,
-	save: (self: ProfileBase<T>) -> (),
+	save: (self: ProfileBase<T>) -> Result<nil>,
 	unload: (self: ProfileBase<T>) -> (),
-	update: (self: ProfileBase<T>, (T) -> T | false) -> boolean,
+	--- Ok(true) when the data changed, Ok(false) when the dispatcher returned
+	--- nil / false. An error thrown by the dispatcher propagates as is.
+	update: (self: ProfileBase<T>, (T) -> T | false) -> Result<boolean>,
 
 	on_change: (self: ProfileBase<T>, callback: (new: T, old: T?) -> ()) -> (),
 	on_save: (self: ProfileBase<T>, callback: () -> ()) -> (),
@@ -274,13 +436,14 @@ export type Profile<T = any> = ProfileBase<T> & {
 
 	--- Writes the data and gives the session lock back, keeping the profile
 	--- open so another server may take the key. No-op when already released.
-	release: (self: Profile<T>) -> (),
+	release: (self: Profile<T>) -> Result<nil>,
 	--- Takes the session lock again (waits like `load` does) and adopts the
 	--- stored record as the current data. No-op when already locked.
-	readquire: (self: Profile<T>) -> (),
+	readquire: (self: Profile<T>) -> Result<nil>,
 
-	-- internal, used by transactions. Returns false when the lock is gone.
-	_write_record: (self: Profile<T>, options: ProfileWriteOptions) -> boolean,
+	-- internal, used by transactions. Returns false (and the lock now on the
+	-- record) when the lock is gone.
+	_write_record: (self: Profile<T>, options: ProfileWriteOptions) -> (boolean, Lock?),
 }
 
 export type ProfileWriteOptions = {
@@ -312,7 +475,7 @@ export type LocklessProfile<T = any> = ProfileBase<T> & {
 		lock_lost: Array<() -> ()>,
 	},
 
-	fetch: (self: LocklessProfile<T>) -> T,
+	fetch: (self: LocklessProfile<T>) -> Result<T>,
 
 	-- internal, used by transactions
 	_write_queued: (self: LocklessProfile<T>, options: LocklessWriteOptions) -> (),
@@ -340,7 +503,7 @@ export type PeekProfile<T = any> = {
 	get_data: (self: PeekProfile<T>) -> T,
 	--- Calls `GetAsync` again and replaces `lock`, `pending`, `migrations` and
 	--- the data. Yields.
-	refresh: (self: PeekProfile<T>) -> T,
+	refresh: (self: PeekProfile<T>) -> Result<T>,
 }
 
 export type LocklessWriteOptions = {
@@ -367,7 +530,7 @@ export type LoadOptions = {
 export type MigrationsResult = {
 	applied: boolean,
 	success: boolean,
-	err: any,
+	err: MigrationMismatchError?,
 	result: any,
 	new_migrations: { string },
 }

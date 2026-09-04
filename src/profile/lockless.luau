@@ -1,5 +1,7 @@
 local common = require "./common"
+local errors = require "../errors"
 local mutex = require "../mutex"
+local result = require "../result"
 local tx_handle = require "../tx/handle"
 local types = require "../types"
 local utils = require "../utils"
@@ -15,7 +17,7 @@ lockless_profile.__index = lockless_profile
 function lockless_profile.get_data(self: LocklessProfile)
 	common.assert_open(self)
 	if not self.fetched then
-		error(`datastore: lockless profile "{self.key}" has not been fetched`)
+		error(errors.not_fetched(self), 0)
 	end
 	return self._data
 end
@@ -67,11 +69,11 @@ local function resolve_record(self: LocklessProfile, record: DataRecord?, data: 
 		return utils.deep_copy(config.template), common.all_migration_names(config.migrations)
 	end
 
-	local result = common.apply_migrations(data, applied, config.migrations)
-	if not result.success then
-		error(`datastore: failed to apply migrations for "{self.key}": {result.err}`)
+	local migrated = common.apply_migrations(self.key, data, applied, config.migrations)
+	if not migrated.success then
+		error(migrated.err, 0)
 	end
-	return result.result, result.new_migrations
+	return migrated.result, migrated.new_migrations
 end
 
 local function replay(queue: Array<types.DataDispatcher<any>>, data: any): any
@@ -108,13 +110,15 @@ local function process_lock_lost(self: LocklessProfile)
 		return
 	end
 	self.open = false
-	self._mutex:close(`datastore: profile "{self.key}" is session locked`)
+	self._mutex:close(errors.profile_closed(self, "lock_lost"))
 	fire_hooks(self, "lock_lost", self._hooks.lock_lost)
 	fire_hooks(self, "closed", self._hooks.closed)
 end
 
 type SaveState = {
 	applied: boolean,
+	--- the lock found on the record (session or transaction), nil when none
+	lock: types.Lock?,
 	--- a live transaction lock is on the record; `tx_lock_expires` says until when
 	tx_locked: boolean,
 	tx_lock_expires: number,
@@ -123,6 +127,9 @@ type SaveState = {
 	tx_lock_lost: boolean,
 	outdated: boolean,
 	unknown_pending: types.Pending?,
+	--- the transform threw (a migration or a queued dispatcher): rethrown after
+	--- the storage call instead of being retried as a storage failure
+	failure: any,
 }
 
 type WriteOptions = types.LocklessWriteOptions
@@ -135,7 +142,11 @@ type WriteOptions = types.LocklessWriteOptions
 --- `self._tx_lock`). `options.old_tx_lock` is the lock this write expects to
 --- find on the record: the write only goes through (and clears that lock) when
 --- the stored lock has the same id. If the lock is gone or belongs to someone
---- else, nothing is written and the call fails with "lock_lost".
+--- else, nothing is written and the call fails with `tx_lock_lost`.
+---
+--- Throws `profile_locked` (a live session lock; the profile is closed),
+--- `tx_lock_lost` (closed too), `outdated`, `migration_mismatch`, `roblox`,
+--- or whatever a queued dispatcher / migration threw.
 local function write_queued(self: LocklessProfile, options: WriteOptions)
 	local config = self.config
 	local scheduler = config._scheduler
@@ -146,23 +157,19 @@ local function write_queued(self: LocklessProfile, options: WriteOptions)
 
 	local state: SaveState = {
 		applied = false,
+		lock = nil,
 		tx_locked = false,
 		tx_lock_expires = 0,
 		tx_lock_lost = false,
 		session_locked = false,
 		outdated = false,
 		unknown_pending = nil,
+		failure = nil,
 	}
 
-	local function transform(old: DataRecord?): DataRecord?
-		state.applied = false
-		state.tx_locked = false
-		state.session_locked = false
-		state.tx_lock_lost = false
-		state.outdated = false
-		state.unknown_pending = nil
-
+	local function transform_body(old: DataRecord?): DataRecord?
 		local lock = if old then old.lock else nil
+		state.lock = lock
 
 		-- a live session lock means a locked profile owns this key now: the
 		-- profile lost its lockless standing, whatever else it expected on the
@@ -222,22 +229,45 @@ local function write_queued(self: LocklessProfile, options: WriteOptions)
 		}
 	end
 
+	-- the body runs migrations and queued dispatchers (user code) and may raise
+	-- a `migration_mismatch`: none of those is a storage failure, so the
+	-- storage retry must not see them. They cancel the write and are rethrown.
+	local function transform(old: DataRecord?): DataRecord?
+		state.applied = false
+		state.lock = nil
+		state.tx_locked = false
+		state.session_locked = false
+		state.tx_lock_lost = false
+		state.outdated = false
+		state.unknown_pending = nil
+		state.failure = nil
+
+		local ok, new = pcall(transform_body, old)
+		if not ok then
+			state.failure = new
+			return nil
+		end
+		return new
+	end
+
 	while true do
-		local record = utils.retry(config, function()
-			return datastore.update_async(self.key, transform, self.user_ids)
-		end) :: DataRecord
+		local record = utils.update_async(config, datastore, self.key, transform, self.user_ids) :: DataRecord
+
+		if state.failure ~= nil then
+			error(state.failure, 0)
+		end
 
 		if state.session_locked then
 			self._tx_lock = nil
 			process_lock_lost(self)
-			error(`datastore: "{self.key}" is session locked`)
+			error(errors.profile_locked(self, state.lock :: types.Lock), 0)
 		end
 
 		if state.tx_lock_lost then
 			-- whatever is on the record now is not ours; do not touch it again
 			self._tx_lock = nil
 			process_lock_lost(self)
-			error(`datastore: lock_lost for "{self.key}"`)
+			error(errors.tx_lock_lost(self, old_tx_lock :: types.Lock, state.lock), 0)
 		end
 
 		if state.tx_locked then
@@ -247,9 +277,7 @@ local function write_queued(self: LocklessProfile, options: WriteOptions)
 		end
 
 		if state.outdated then
-			error(
-				`datastore: "{self.key}" was written by a newer server (record has {#record.migrations} applied migrations, this server declares {#config.migrations})`
-			)
+			error(errors.outdated(self, record.migrations or {}, common.all_migration_names(config.migrations)), 0)
 		end
 
 		local unknown = state.unknown_pending
@@ -307,16 +335,20 @@ end
 
 --- Applies every queued update to the stored data in one update_async and
 --- refreshes the local data with the result. Marks the profile fetched.
---- Throws (keeping the queue) if another server holds a live session lock, or
---- if the record was already written by a newer server (more migrations applied
---- than this server declares). Neither case is retried.
-function lockless_profile.save(self: LocklessProfile)
-	common.assert_open(self)
-	-- before the mutex so hooks can still queue updates that land in this save
-	fire_hooks(self, "save", self._hooks.save)
-	common.assert_open(self)
-	self._mutex:with(function()
-		write_queued(self, {})
+--- Fails (keeping the queue) with `profile_locked` if another server holds a
+--- live session lock (the profile is closed), `outdated` if the record was
+--- already written by a newer server, `migration_mismatch`, `roblox` or
+--- `profile_closed`. An error thrown by a queued dispatcher propagates as is.
+function lockless_profile.save(self: LocklessProfile): types.Result<nil>
+	return result.capture(function()
+		common.assert_open(self)
+		-- before the mutex so hooks can still queue updates that land in this save
+		fire_hooks(self, "save", self._hooks.save)
+		common.assert_open(self)
+		self._mutex:with(function()
+			write_queued(self, {})
+		end)
+		return nil
 	end)
 end
 
@@ -330,7 +362,7 @@ function lockless_profile.unload(self: LocklessProfile)
 	self.open = false
 	self._mutex:lock()
 	-- everything still waiting on the mutex (and anything after) is rejected
-	self._mutex:close(`datastore: profile "{self.key}" is closed`)
+	self._mutex:close(errors.profile_closed(self, "unloaded"))
 	local ok, err = utils.try(function()
 		if #self.queued_updates > 0 or self.dirty_pending then
 			write_queued(self, {})
@@ -338,7 +370,9 @@ function lockless_profile.unload(self: LocklessProfile)
 	end)
 	self._mutex:unlock()
 	if not ok then
-		self.config._hook.warn(`datastore: failed to flush "{self.key}" on unload ({#self.queued_updates} changes lost): {tostring(err)}`)
+		self.config._hook.warn(
+			`datastore: failed to flush "{self.key}" on unload ({#self.queued_updates} changes lost): {tostring(err)}`
+		)
 	end
 	fire_hooks(self, "closed", self._hooks.closed)
 end
@@ -380,14 +414,12 @@ local function read_record(self: LocklessProfile)
 	local config = self.config
 	local datastore = self._datastore
 
-	local record = utils.retry(config, function()
-		return datastore.get_async(self.key)
-	end) :: DataRecord?
+	local record = utils.get_async(config, datastore, self.key) :: DataRecord?
 
 	local lock = if record then record.lock else nil
 	if lock and not lock.tx and lock.expires > config._scheduler.now() then
 		process_lock_lost(self)
-		error(`datastore: "{self.key}" is session locked`)
+		error(errors.profile_locked(self, lock), 0)
 	end
 	-- an expired session lock belongs to a dead server: ignored, the next write clears it
 	-- a transaction lock does not matter for a read: the data under it is the
@@ -414,22 +446,31 @@ local function read_record(self: LocklessProfile)
 	return self._data
 end
 
-function lockless_profile.fetch(self: LocklessProfile)
-	common.assert_open(self)
-	return self._mutex:with(function()
-		return read_record(self)
+--- Fails with `profile_locked` (a session lock is on the record; the profile
+--- is closed), `migration_mismatch`, `roblox`, `tx_marker_invalid` or
+--- `profile_closed`. An error thrown by a queued dispatcher propagates as is.
+function lockless_profile.fetch(self: LocklessProfile): types.Result<any>
+	return result.capture(function()
+		common.assert_open(self)
+		return self._mutex:with(function()
+			return read_record(self)
+		end)
 	end)
 end
 
 --- Queues `dispatcher` to run against the stored data on the next save. When
 --- the profile is fetched, the local data is advanced right away so `get_data()`
 --- reflects the queued change. A dispatcher returning `false` (or nil) is a
---- no-op and is not queued. Waits for any in-flight save/fetch on the mutex.
-function lockless_profile.update(self: LocklessProfile, dispatcher: (any) -> any): boolean
-	common.assert_open(self)
+--- no-op and is not queued (Ok(false)). Waits for any in-flight save/fetch on
+--- the mutex. Fails with `profile_closed`; an error thrown by the dispatcher
+--- propagates as is.
+function lockless_profile.update(self: LocklessProfile, dispatcher: (any) -> any): types.Result<boolean>
+	return result.capture(function()
+		common.assert_open(self)
 
-	return self._mutex:with(function()
-		return queue_update(self, dispatcher)
+		return self._mutex:with(function()
+			return queue_update(self, dispatcher)
+		end)
 	end)
 end
 
@@ -449,9 +490,11 @@ local function run_flush_loop(self: LocklessProfile)
 				continue
 			end
 
-			local ok, err = utils.try(self.save, self)
+			local ok, res = utils.try(self.save, self)
 			if not ok then
-				config._hook.warn(`datastore: failed to flush "{self.key}": {tostring(err)}`)
+				config._hook.warn(`datastore: failed to flush "{self.key}": {tostring(res)}`)
+			elseif not res.success then
+				config._hook.warn(`datastore: failed to flush "{self.key}": {tostring(res.error)}`)
 			end
 		end
 	end)

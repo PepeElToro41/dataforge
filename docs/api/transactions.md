@@ -9,14 +9,18 @@ function dataforge.transaction(
 	profiles: { ProfileBase },
 	process: (ctx: TxContext) -> boolean?,
 	config: TransactionConfig?
-): boolean
+): Result<boolean>
 ```
 
-| Returns / throws | When |
+| Result | When |
 | --- | --- |
-| `true` | Committed: every changed participant holds its new data. |
-| `false` | `process` returned `false`; nothing was written. |
-| throws | Aborted: a participant lost its lock, a lockless participant could not be locked, storage failed after retries, or a participant is closed / released. |
+| `Ok(true)` | Committed: every changed participant holds its new data. |
+| `Ok(false)` | `process` returned `false`; nothing was written. |
+| `Err(tx_aborted)` | Aborted during phase 1: `cause` is the participant's error (`lock_lost`, `tx_lock_lost`, `roblox`, ...), or `nil` when another server already resolved the marker as aborted. |
+| `Err(profile_closed)`, `Err(not_locked)` | A participant is closed or released. |
+| `Err(profile_locked)`, `Err(outdated)`, `Err(roblox)`, `Err(migration_mismatch)` | Flushing a lockless participant before the snapshot failed. |
+
+Misuse (non-profiles, duplicates, no profiles, mixed hooks, `ctx:set(profile, nil)`) and errors thrown by `process` throw. See [Errors](./errors).
 
 Requirements:
 

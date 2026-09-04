@@ -29,7 +29,7 @@ type Config<T> = {
 | `autosave_interval` | `30` | Seconds between autosaves of locked profiles. |
 | `flush_interval` | `autosave_interval` | Seconds between flushes of lockless profiles. |
 | `lock_ttl` | `60` | Seconds a session lock stays valid without refresh. |
-| `load_timeout` | `lock_ttl + 10` | Seconds `load` waits for a locked key before throwing. |
+| `load_timeout` | `lock_ttl + 10` | Seconds `load` waits for a locked key before failing with `timeout`. |
 | `load_poll` | `1` | Seconds between lock polls while waiting in `load`. |
 | `retry_attempts` | `5` | Storage retries per operation. |
 | `retry_base` | `1` | Seconds; exponential backoff base between retries. |
@@ -49,18 +49,18 @@ type Config<T> = {
 ### `store:load(key, user_ids)`
 
 ```luau
-(self: Store<T>, key: string, user_ids: { number }) -> Profile<T>
+(self: Store<T>, key: string, user_ids: { number }) -> Result<Profile<T>>
 ```
 
-Takes the session lock on `key`, resolves any dangling transaction, runs migrations and returns the [Profile](./profile). Yields. Throws on timeout (`load_timeout`), storage error, or if the key is already loaded on this store. `user_ids` is forwarded to the datastore for GDPR tracking.
+Takes the session lock on `key`, resolves any dangling transaction, runs migrations and returns the [Profile](./profile). Yields. Fails with `timeout` (`load_timeout`, carrying the holder's lock), `roblox`, `migration_mismatch`, `tx_marker_invalid`, `already_loaded` or `store_closed`; see [Errors](./errors). `user_ids` is forwarded to the datastore for GDPR tracking.
 
 ### `store:wait_loaded(key, user_ids)`
 
 ```luau
-(self: Store<T>, key: string, user_ids: { number }) -> Profile<T>
+(self: Store<T>, key: string, user_ids: { number }) -> Result<Profile<T>>
 ```
 
-Returns the open profile for `key`; if a `load` is in flight, waits for it. Otherwise loads it.
+Returns the open profile for `key`; if a `load` is in flight, waits for it and returns the same result. Otherwise loads it.
 
 ### `store:get_loaded(key)`
 
@@ -76,15 +76,15 @@ The open locked profile for `key`, or `nil`. Never yields.
 (self: Store<T>, key: string, user_ids: { number }) -> LocklessProfile<T>
 ```
 
-Returns the [LocklessProfile](./lockless-profile) for `key`, creating it if needed. Never yields: a lockless profile does no storage work until `fetch` or its first flush.
+Returns the [LocklessProfile](./lockless-profile) for `key`, creating it if needed. Never yields: a lockless profile does no storage work until `fetch` or its first flush. Throws a `store_closed` error table on a closed store.
 
 ### `store:peek(key)`
 
 ```luau
-(self: Store<T>, key: string) -> PeekProfile<T>
+(self: Store<T>, key: string) -> Result<PeekProfile<T>>
 ```
 
-Reads `key` once with `GetAsync` and returns a [PeekProfile](./peek-profile): the stored data (template if missing, migrations applied in memory) and the lock currently on the record, if any. Yields. Takes no lock, writes nothing, and the result is not tracked by the store nor accepted by transactions. Works while another server holds the key.
+Reads `key` once with `GetAsync` and returns a [PeekProfile](./peek-profile): the stored data (template if missing, migrations applied in memory) and the lock currently on the record, if any. Yields. Takes no lock, writes nothing, and the result is not tracked by the store nor accepted by transactions. Works while another server holds the key. Fails with `roblox`, `migration_mismatch` or `store_closed`.
 
 ### `store:transaction(profiles, transform, config?)`
 
@@ -94,10 +94,10 @@ Reads `key` once with `GetAsync` and returns a [PeekProfile](./peek-profile): th
 	profiles: { ProfileBase<T> },
 	transform: (data: { T }) -> { T } | false,
 	config: TransactionConfig?
-) -> boolean
+) -> Result<boolean>
 ```
 
-Positional variant of [`dataforge.transaction`](./dataforge#dataforge-transaction-profiles-process-config) for profiles of this store. `transform` receives their data in order and returns the new data in the same order, or `false` to cancel. Returns `false` when cancelled, `true` when committed; throws when aborted.
+Positional variant of [`dataforge.transaction`](./dataforge#dataforge-transaction-profiles-process-config) for profiles of this store. `transform` receives their data in order and returns the new data in the same order, or `false` to cancel. `Ok(false)` when cancelled, `Ok(true)` when committed; fails like `dataforge.transaction`, plus `store_closed`. A transform that returns no data for a participant throws (misuse).
 
 ### `store:close()`
 
@@ -105,7 +105,7 @@ Positional variant of [`dataforge.transaction`](./dataforge#dataforge-transactio
 (self: Store<T>) -> ()
 ```
 
-Unloads every open profile (locked and lockless) and marks the store closed. Meant for `game:BindToClose`. Later `load` / `get_lockless` calls throw.
+Unloads every open profile (locked and lockless) and marks the store closed. Meant for `game:BindToClose`. Later `load` / `peek` / `transaction` calls fail with `store_closed`; `get_lockless` throws it.
 
 ## Events
 

@@ -1,3 +1,4 @@
+local errors = require "../errors"
 local types = require "../types"
 
 export type TxOperation = types.TxOperation
@@ -23,14 +24,16 @@ local function resolve_marker(self: TxOperation): TxOutcome
 	end)
 
 	if result ~= "committed" and result ~= "aborted" then
-		error(`datastore: unexpected tx marker value for {id}: {tostring(result)}`)
+		error(errors.tx_marker_invalid(id, result), 0)
 	end
 	return result :: TxOutcome
 end
 
 --- Resolves the marker (blocking, retrying with backoff until the storage
---- answers), then applies the outcome to every patch exactly once. Safe to call
---- from several coroutines: later callers wait for the first resolution.
+--- answers with a valid outcome), then applies the outcome to every patch
+--- exactly once. Never fails: every participant mutex is held meanwhile, so
+--- giving up would leave them without an outcome. Safe to call from several
+--- coroutines: later callers wait for the first resolution.
 function tx_operation.settle(self: TxOperation): TxOutcome
 	local scheduler = self.config._scheduler
 
