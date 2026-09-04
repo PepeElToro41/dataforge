@@ -78,7 +78,7 @@ peek:refresh()                        -- GetAsync again, also refreshes peek.loc
 ```
 
 ::: warning Newer servers make peek fail
-`store:peek` and `peek:refresh` fail with `migration_mismatch` if the stored value was written by a newer server with extra migrations, that is, the record lists migrations this store does not declare (or in a different order). The data cannot be interpreted by this server, so no snapshot is returned. Check the result instead of unwrapping if the store may run alongside newer versions of the game.
+`store:peek` and `peek:refresh` fail with `outdated` if the stored value was written by a newer server with extra migrations (the record lists migrations this store does not declare), and with `migration_mismatch` if the names disagree. The data cannot be interpreted by this server, so no snapshot is returned. Check the result instead of unwrapping if the store may run alongside newer versions of the game.
 :::
 
 A peek never writes, works while another server holds the key, and cannot be updated or passed to a transaction. See [PeekProfile](../api/peek-profile).

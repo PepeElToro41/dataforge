@@ -47,8 +47,9 @@ export type Store<T = any> = {
 
 	config: ResolvedConfig<T>,
 	--- Takes the session lock for `key` and loads it. Yields. Fails with
-	--- `store_closed`, `already_loaded`, `timeout`, `roblox`,
-	--- `migration_mismatch` or `tx_marker_invalid`.
+	--- `store_closed`, `already_loaded`, `timeout`, `roblox`, `outdated` (a
+	--- newer server wrote the record; no lock is taken), `migration_mismatch`
+	--- or `tx_marker_invalid`.
 	load: (self: Store<T>, key: string, user_ids: { number }) -> Result<Profile<T>>,
 	--- Returns the profile for `key`, waiting for it to load or loading it if
 	--- nobody has yet. Waiters get the same Result as the load.
@@ -62,7 +63,7 @@ export type Store<T = any> = {
 
 	--- Read-only snapshot of `key` via `GetAsync`: the current data and lock.
 	--- Yields. The result is not tracked by the store, takes no lock and cannot
-	--- join a transaction. Fails with `store_closed`, `roblox` or
+	--- join a transaction. Fails with `store_closed`, `roblox`, `outdated` or
 	--- `migration_mismatch`.
 	peek: (self: Store<T>, key: string) -> Result<PeekProfile<T>>,
 

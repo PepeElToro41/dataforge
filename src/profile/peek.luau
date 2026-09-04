@@ -18,7 +18,7 @@ peek_profile.__index = peek_profile
 --- Reads the record with `GetAsync` and adopts it: `lock` and `pending` are
 --- taken as stored, the data gets the declared migrations applied in memory
 --- (nothing is written). A missing key resolves to the template. Throws
---- `roblox` or `migration_mismatch`.
+--- `roblox`, `outdated` or `migration_mismatch`.
 local function read(self: PeekProfile): any
 	local config = self._config
 	local datastore = self._datastore
@@ -52,14 +52,15 @@ function peek_profile.get_data(self: PeekProfile)
 end
 
 --- Calls `get_async` again and replaces the snapshot. Yields. Fails with
---- `roblox` or `migration_mismatch`, leaving the previous snapshot in place.
+--- `roblox`, `outdated` or `migration_mismatch`, leaving the previous snapshot
+--- in place.
 function peek_profile.refresh(self: PeekProfile): types.Result<any>
 	return result.capture(read, self)
 end
 
 --- Takes the first snapshot right away (yields). The profile has no mutex, no
 --- loops and no hooks: it is a plain value that can be refreshed. Fails with
---- `roblox` or `migration_mismatch`.
+--- `roblox`, `outdated` or `migration_mismatch`.
 function peek_profile.create(options: PeekOptions): types.Result<PeekProfile>
 	local self = {} :: PeekProfile
 	self.kind = "peek"

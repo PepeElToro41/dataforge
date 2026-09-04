@@ -198,10 +198,14 @@ export type TxLockLostError = {
 	lock: Lock?,
 }
 
+--- The record lists more migrations than this server declares: a newer server
+--- wrote it, so this one must not touch it (nothing is written, no lock taken).
 export type OutdatedError = {
 	type: "outdated",
 	message: string,
-	profile: any,
+	key: string,
+	--- the profile the call ran on; nil for `store:load` and `store:peek`
+	profile: any?,
 	record_migrations: Array<string>,
 	declared_migrations: Array<string>,
 }
@@ -219,14 +223,16 @@ export type ProfileClosedError = {
 	reason: "unloaded" | "lock_lost",
 }
 
+--- A name in the record's applied migrations differs from the declared one
+--- at `index`. A record with more migrations than declared is `outdated`.
 export type MigrationMismatchError = {
 	type: "migration_mismatch",
 	message: string,
 	key: string,
-	--- set when a name differs: the record's and the declared migration there
-	index: number?,
-	expected: string?,
-	actual: string?,
+	--- the position that differs, and the declared / record's name there
+	index: number,
+	expected: string,
+	actual: string,
 	--- names the record has applied / this server declares
 	applied: Array<string>,
 	declared: Array<string>,
@@ -530,7 +536,9 @@ export type LoadOptions = {
 export type MigrationsResult = {
 	applied: boolean,
 	success: boolean,
-	err: MigrationMismatchError?,
+	--- `outdated` when the record lists more migrations than declared,
+	--- `migration_mismatch` when a name differs
+	err: (MigrationMismatchError | OutdatedError)?,
 	result: any,
 	new_migrations: { string },
 }

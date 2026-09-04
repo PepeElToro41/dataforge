@@ -27,6 +27,9 @@ local function adquire_lock(load_options: LoadOptions): types.DataRecord
 	local deadline = scheduler.now() + config.load_timeout
 	-- the last lock seen on the record, reported when the load times out
 	local last_lock: types.Lock? = nil
+	-- set by the transform: the record lists more migrations than this server
+	-- declares, so the lock must not be taken (the write is cancelled)
+	local outdated_migrations: { string }? = nil
 
 	while true do
 		local now = scheduler.now()
@@ -35,6 +38,11 @@ local function adquire_lock(load_options: LoadOptions): types.DataRecord
 			datastore,
 			key,
 			function(old: types.DataRecord?): types.DataRecord?
+				outdated_migrations = nil
+				if common.is_outdated(old, config) then
+					outdated_migrations = (old :: types.DataRecord).migrations
+					return nil
+				end
 				if common.is_locked_for(old :: types.DataRecord, job_id, now) then
 					return nil
 				end
@@ -53,6 +61,9 @@ local function adquire_lock(load_options: LoadOptions): types.DataRecord
 			user_ids
 		) :: types.DataRecord
 
+		if outdated_migrations ~= nil then
+			error(errors.outdated(key, outdated_migrations, common.all_migration_names(config.migrations)), 0)
+		end
 		if common.is_lock_owned(lock_applied, job_id) then
 			return lock_applied
 		end
@@ -457,8 +468,8 @@ end
 --- Takes the session lock again, waiting for a holder like `load` does, and
 --- adopts the stored record (resolved pending, migrations) as the current
 --- data. Fails with `timeout` (the profile stays open and released),
---- `profile_closed`, `roblox`, `migration_mismatch` or `tx_marker_invalid`.
---- No-op when already locked.
+--- `profile_closed`, `roblox`, `outdated`, `migration_mismatch` or `tx_marker_invalid`. No-op when
+--- already locked.
 function profile.readquire(self: Profile): types.Result<nil>
 	return result.capture(function()
 		common.assert_open(self)
@@ -470,7 +481,14 @@ function profile.readquire(self: Profile): types.Result<nil>
 			if self.is_locked then
 				return
 			end
-			local data, new_migrations, dirty = adquire_and_resolve(load_options_of(self))
+			local ok, data, new_migrations, dirty = pcall(adquire_and_resolve, load_options_of(self))
+			if not ok then
+				local err: any = data
+				if errors.is(err) and err.type == "outdated" then
+					err.profile = self
+				end
+				error(err, 0)
+			end
 
 			self.migrations = new_migrations
 			set_data(self, data)

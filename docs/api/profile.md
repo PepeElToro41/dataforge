@@ -56,7 +56,7 @@ Writes the data and gives the session lock back, keeping the profile open so ano
 (self: Profile<T>) -> Result<nil>
 ```
 
-Takes the session lock again, waiting like `load` does, and adopts the stored record (resolved pending, migrations) as the current data, firing `on_change`. Fails with `timeout` (leaving the profile open and released), `profile_closed`, `roblox`, `migration_mismatch` or `tx_marker_invalid`. No-op when already locked.
+Takes the session lock again, waiting like `load` does, and adopts the stored record (resolved pending, migrations) as the current data, firing `on_change`. Fails with `timeout` (leaving the profile open and released), `profile_closed`, `roblox`, `outdated` (a newer server wrote the record; no lock is taken, the profile stays released), `migration_mismatch` or `tx_marker_invalid`. No-op when already locked.
 
 ### `profile:unload()`
 

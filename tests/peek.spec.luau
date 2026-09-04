@@ -137,16 +137,16 @@ TEST("peek profile", function()
 		CHECK(#peek.migrations == 1 and peek.migrations[1] == "a")
 	end)
 
-	CASE("throws when the record has migrations this server does not declare", function()
+	CASE("fails with outdated when the record has migrations this server does not declare", function()
 		hook.data[helpers.STORE] = { k = { data = { coins = 2 }, migrations = { "newer" } } }
 		local store = helpers.make_store(hook, scheduler)
 		local handle = helpers.run(scheduler, function()
 			return store:peek "k"
 		end)
-		local err = helpers.err(handle, "migration_mismatch")
-		CHECK(err.key == "k" and err.index == nil)
-		CHECK(#err.applied == 1 and err.applied[1] == "newer" and #err.declared == 0)
-		CHECK(string.find(tostring(err), "failed to apply migrations", 1, true) ~= nil)
+		local err = helpers.err(handle, "outdated")
+		CHECK(err.key == "k" and err.profile == nil)
+		CHECK(#err.record_migrations == 1 and err.record_migrations[1] == "newer" and #err.declared_migrations == 0)
+		CHECK(string.find(tostring(err), "newer server", 1, true) ~= nil)
 		CHECK(writes "k" == 0)
 	end)
 

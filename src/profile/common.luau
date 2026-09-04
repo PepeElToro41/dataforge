@@ -19,9 +19,10 @@ function common.assert_open(self: ProfileBase)
 end
 
 --- Applies the declared migrations not yet in `applied` (in order). Pure, so it
---- is safe inside an update transform. Fails (a `migration_mismatch` error in
---- `err`) when the record's applied list does not prefix-match the declared
---- list. An error thrown by a migration's `apply` propagates as is.
+--- is safe inside an update transform. Fails with `outdated` in `err` when the
+--- record lists more migrations than declared (a newer server wrote it), or
+--- `migration_mismatch` when a name in the applied prefix differs. An error
+--- thrown by a migration's `apply` propagates as is.
 function common.apply_migrations(
 	key: string,
 	data: any,
@@ -34,10 +35,7 @@ function common.apply_migrations(
 		return {
 			applied = false,
 			success = false,
-			err = errors.migration_mismatch(key, {
-				applied = applied,
-				declared = common.all_migration_names(migrations),
-			}),
+			err = errors.outdated(key, applied, common.all_migration_names(migrations)),
 			new_migrations = applied,
 		}
 	end
@@ -82,6 +80,24 @@ function common.all_migration_names(migrations: Array<types.Migration>): { strin
 		names[index] = migration.name
 	end
 	return names
+end
+
+--- Whether the record lists more migrations than this server declares. Pure.
+function common.is_outdated(record: types.DataRecord?, config: types.ResolvedConfig): boolean
+	if not record or not record.migrations then
+		return false
+	end
+	return #record.migrations > #config.migrations
+end
+
+--- Rethrows a failed `apply_migrations` with the profile attached to an
+--- `outdated` error (a `migration_mismatch` has no profile field).
+function common.raise_migrations(profile: ProfileBase, migrated: MigrationsResult)
+	local err: any = migrated.err
+	if err.type == "outdated" then
+		err.profile = profile
+	end
+	error(err, 0)
 end
 
 function common.is_lock_owned(record: types.DataRecord?, job_id: string)

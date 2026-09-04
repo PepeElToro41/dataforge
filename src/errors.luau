@@ -84,14 +84,18 @@ function errors.tx_lock_lost(profile: any, expected: Lock, lock: Lock?): types.T
 	}
 end
 
+--- `profile` is the lockless / locked profile the call ran on, when there is
+--- one (nil for `load` and `peek`).
 function errors.outdated(
-	profile: any,
+	key: string,
 	record_migrations: Array<string>,
-	declared_migrations: Array<string>
+	declared_migrations: Array<string>,
+	profile: any?
 ): types.OutdatedError
 	return make {
 		type = "outdated" :: "outdated",
-		message = `datastore: "{profile.key}" was written by a newer server (record has {#record_migrations} applied migrations, this server declares {#declared_migrations})`,
+		message = `datastore: "{key}" was written by a newer server (record has {#record_migrations} applied migrations, this server declares {#declared_migrations})`,
+		key = key,
 		profile = profile,
 		record_migrations = record_migrations,
 		declared_migrations = declared_migrations,
@@ -130,17 +134,16 @@ function errors.closed(profile: any): types.ProfileClosedError
 end
 
 export type MigrationMismatchDetails = {
-	index: number?,
-	expected: string?,
-	actual: string?,
+	index: number,
+	expected: string,
+	actual: string,
 	applied: Array<string>,
 	declared: Array<string>,
 }
 
 function errors.migration_mismatch(key: string, details: MigrationMismatchDetails): types.MigrationMismatchError
-	local reason = if details.index ~= nil
-		then `migration mismatch at index {details.index}: record has "{details.actual}", declared is "{details.expected}"`
-		else `record has {#details.applied} applied migrations but only {#details.declared} are declared`
+	local reason =
+		`migration mismatch at index {details.index}: record has "{details.actual}", declared is "{details.expected}"`
 	return make {
 		type = "migration_mismatch" :: "migration_mismatch",
 		message = `datastore: failed to apply migrations for "{key}": {reason}`,

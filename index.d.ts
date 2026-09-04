@@ -256,10 +256,15 @@ declare namespace dataforge {
 		readonly lock: Lock | undefined;
 	}
 
-	/** The record was written by a newer server (more migrations than declared). */
+	/**
+	 * The record was written by a newer server (it lists more migrations than
+	 * this store declares). Nothing is written and no lock is taken.
+	 */
 	interface OutdatedError extends ErrorBase {
 		readonly type: "outdated";
-		readonly profile: LocklessProfile<any>;
+		readonly key: string;
+		/** The profile the call ran on; `undefined` for `store.load` and `store.peek`. */
+		readonly profile: AnyProfile<any> | undefined;
 		readonly record_migrations: string[];
 		readonly declared_migrations: string[];
 	}
@@ -277,14 +282,16 @@ declare namespace dataforge {
 		readonly reason: "unloaded" | "lock_lost";
 	}
 
-	/** The record's applied migrations do not prefix-match the declared ones. */
+	/**
+	 * A name in the record's applied migrations differs from the declared one
+	 * at `index`. A record with more migrations than declared is `outdated`.
+	 */
 	interface MigrationMismatchError extends ErrorBase {
 		readonly type: "migration_mismatch";
 		readonly key: string;
-		/** Set when a name differs: the record's and the declared migration there. */
-		readonly index: number | undefined;
-		readonly expected: string | undefined;
-		readonly actual: string | undefined;
+		readonly index: number;
+		readonly expected: string;
+		readonly actual: string;
 		/** Names the record has applied / this store declares. */
 		readonly applied: string[];
 		readonly declared: string[];
@@ -437,7 +444,7 @@ declare namespace dataforge {
 		/**
 		 * Takes the session lock again (waits like `load` does) and adopts the
 		 * stored record as the current data. No-op when already locked. Fails
-		 * with `timeout`, `profile_closed`, `roblox`, `migration_mismatch`.
+		 * with `timeout`, `profile_closed`, `roblox`, `outdated`, `migration_mismatch`.
 		 */
 		readquire(): Result<void>;
 	}
@@ -454,7 +461,7 @@ declare namespace dataforge {
 		 * Reads the stored record into the local data: migrations are applied,
 		 * then the queued updates replayed on top. Marks the profile fetched.
 		 * Yields. Fails (keeping the queue) with `lockless_locked` if a session
-		 * lock is on the record, `roblox`, `migration_mismatch`, `profile_closed`.
+		 * lock is on the record, `outdated`, `roblox`, `migration_mismatch`, `profile_closed`.
 		 */
 		fetch(): Result<T>;
 	}
@@ -480,7 +487,7 @@ declare namespace dataforge {
 		get_data(): T;
 		/**
 		 * Calls `GetAsync` again and replaces `lock`, `pending`, `migrations`
-		 * and the data. Yields. Fails with `roblox` or `migration_mismatch`,
+		 * and the data. Yields. Fails with `roblox`, `outdated` or `migration_mismatch`,
 		 * keeping the previous snapshot.
 		 */
 		refresh(): Result<T>;
@@ -509,7 +516,7 @@ declare namespace dataforge {
 		/**
 		 * Takes the session lock for `key` and loads it. Yields. Fails with
 		 * `store_closed`, `already_loaded`, `timeout`, `roblox`,
-		 * `migration_mismatch` or `tx_marker_invalid`.
+		 * `outdated`, `migration_mismatch` or `tx_marker_invalid`.
 		 */
 		load(key: string, user_ids: number[]): Result<Profile<T>>;
 		/**
@@ -529,8 +536,8 @@ declare namespace dataforge {
 		/**
 		 * Read-only snapshot of `key` via `GetAsync`: the current data and lock.
 		 * Yields. The result is not tracked by the store, takes no lock and
-		 * cannot join a transaction. Fails with `store_closed`, `roblox` or
-		 * `migration_mismatch`.
+		 * cannot join a transaction. Fails with `store_closed`, `roblox`, `outdated`
+		 * or `migration_mismatch`.
 		 */
 		peek(key: string): Result<PeekProfile<T>>;
 

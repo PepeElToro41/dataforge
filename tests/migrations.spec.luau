@@ -135,17 +135,52 @@ TEST("migrations (session-locked)", function()
 		helpers.err(again, "migration_mismatch")
 	end)
 
-	CASE("a record with more migrations than declared fails the load", function()
+	CASE("a record written by a newer server fails the load with outdated and takes no lock", function()
 		seed { data = { coins = 3 }, migrations = { "add_items", "double_coins", "future" } }
 		local store = helpers.make_store(hook, scheduler, { migrations = migrations() })
 		local handle = helpers.run(scheduler, function()
 			return store:load("k1", {})
 		end)
-		local err = helpers.err(handle, "migration_mismatch")
-		CHECK(err.index == nil and err.expected == nil and err.actual == nil)
-		CHECK(#err.applied == 3 and #err.declared == 2)
-		CHECK(string.find(tostring(err), "applied migrations", 1, true) ~= nil)
+		local err = helpers.err(handle, "outdated")
+		CHECK(err.key == "k1" and err.profile == nil)
+		CHECK(#err.record_migrations == 3 and err.record_migrations[3] == "future")
+		CHECK(#err.declared_migrations == 2)
+		CHECK(string.find(tostring(err), "newer server", 1, true) ~= nil)
 		CHECK(#ran == 0)
+		-- the lock write was cancelled, so there is nothing to release: one storage call
+		CHECK(helpers.ops(hook, helpers.STORE, "k1", "update_async") == 1)
+		CHECK(helpers.record(hook, "k1").lock == nil)
+		CHECK(store:get_loaded "k1" == nil)
+		-- even while another server holds the key: outdated is decided first
+		hook.data[helpers.STORE].k1.lock = { id = "other", expires = scheduler.now() + 60 }
+		helpers.err(
+			helpers.run(scheduler, function()
+				return store:load("k1", {})
+			end),
+			"outdated"
+		)
+	end)
+
+	CASE("readquire fails with outdated when a newer server wrote the record meanwhile", function()
+		seed { data = { coins = 3 }, migrations = { "add_items", "double_coins" } }
+		local store = helpers.make_store(hook, scheduler, { migrations = migrations() })
+		local profile = helpers.sync(scheduler, function()
+			return store:load("k1", {})
+		end)
+		helpers.sync(scheduler, function()
+			profile:release():unwrap()
+		end)
+		hook.data[helpers.STORE].k1.migrations = { "add_items", "double_coins", "future" }
+		local err = helpers.err(
+			helpers.run(scheduler, function()
+				return profile:readquire()
+			end),
+			"outdated"
+		)
+		CHECK(err.key == "k1" and err.profile == profile)
+		CHECK(#err.record_migrations == 3 and #err.declared_migrations == 2)
+		CHECK(profile.open and not profile.is_locked)
+		CHECK(helpers.record(hook, "k1").lock == nil)
 	end)
 
 	CASE("a failed load leaves no lock behind", function()
@@ -274,6 +309,24 @@ TEST("migrations (lockless)", function()
 		CHECK(record.data.coins == 1 and #record.migrations == 2)
 	end)
 
+	CASE("fetch fails with outdated when a newer server wrote the record", function()
+		seed { data = { coins = 3 }, migrations = { "add_items", "double_coins", "future" } }
+		local store = helpers.make_store(hook, scheduler, { migrations = migrations() })
+		local g = store:get_lockless("k1", {})
+		local err = helpers.err(
+			helpers.run(scheduler, function()
+				return g:fetch()
+			end),
+			"outdated"
+		)
+		CHECK(err.key == "k1" and err.profile == g)
+		CHECK(#err.record_migrations == 3 and err.record_migrations[3] == "future")
+		CHECK(#err.declared_migrations == 2)
+		CHECK(#ran == 0)
+		CHECK(g.open and not g.fetched)
+		CHECK(helpers.ops(hook, helpers.STORE, "k1", "update_async") == 0)
+	end)
+
 	CASE("a record written by a newer server is left alone", function()
 		seed { data = { coins = 3 }, migrations = { "add_items", "double_coins", "future" } }
 		local store = helpers.make_store(hook, scheduler, { migrations = migrations() })
@@ -285,7 +338,7 @@ TEST("migrations (lockless)", function()
 			return g:save()
 		end)
 		local err = helpers.err(save, "outdated")
-		CHECK(err.profile == g)
+		CHECK(err.profile == g and err.key == "k1")
 		CHECK(#err.record_migrations == 3 and err.record_migrations[3] == "future")
 		CHECK(#err.declared_migrations == 2)
 		CHECK(string.find(tostring(err), "newer server", 1, true) ~= nil)

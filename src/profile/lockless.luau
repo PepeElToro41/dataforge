@@ -71,7 +71,7 @@ local function resolve_record(self: LocklessProfile, record: DataRecord?, data: 
 
 	local migrated = common.apply_migrations(self.key, data, applied, config.migrations)
 	if not migrated.success then
-		error(migrated.err, 0)
+		common.raise_migrations(self, migrated)
 	end
 	return migrated.result, migrated.new_migrations
 end
@@ -145,8 +145,9 @@ type WriteOptions = types.LocklessWriteOptions
 --- else, nothing is written and the call fails with `tx_lock_lost`.
 ---
 --- Throws `lockless_locked` (a live session lock; the profile is closed),
---- `tx_lock_lost` (closed too), `outdated`, `migration_mismatch`, `roblox`,
---- or whatever a queued dispatcher / migration threw.
+--- `tx_lock_lost` (closed too), `outdated` (a newer server wrote the record;
+--- nothing written), `migration_mismatch`, `roblox`, or whatever a queued
+--- dispatcher / migration threw.
 local function write_queued(self: LocklessProfile, options: WriteOptions)
 	local config = self.config
 	local scheduler = config._scheduler
@@ -199,7 +200,7 @@ local function write_queued(self: LocklessProfile, options: WriteOptions)
 
 		-- more migrations applied than this server declares: a newer server
 		-- already touched the record, so this server must not write to it
-		if old and old.migrations and #old.migrations > #config.migrations then
+		if common.is_outdated(old, config) then
 			state.outdated = true
 			return nil
 		end
@@ -277,7 +278,10 @@ local function write_queued(self: LocklessProfile, options: WriteOptions)
 		end
 
 		if state.outdated then
-			error(errors.outdated(self, record.migrations or {}, common.all_migration_names(config.migrations)), 0)
+			error(
+				errors.outdated(self.key, record.migrations or {}, common.all_migration_names(config.migrations), self),
+				0
+			)
 		end
 
 		local unknown = state.unknown_pending
@@ -451,8 +455,9 @@ local function read_record(self: LocklessProfile)
 end
 
 --- Fails with `lockless_locked` (a session lock is on the record; the profile
---- is closed), `migration_mismatch`, `roblox`, `tx_marker_invalid` or
---- `profile_closed`. An error thrown by a queued dispatcher propagates as is.
+--- is closed), `outdated` (a newer server wrote the record), `migration_mismatch`,
+--- `roblox`, `tx_marker_invalid` or `profile_closed`. An error thrown by a
+--- queued dispatcher propagates as is.
 function lockless_profile.fetch(self: LocklessProfile): types.Result<any>
 	return result.capture(function()
 		common.assert_open(self)

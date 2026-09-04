@@ -17,7 +17,7 @@ local data = guild:fetch():unwrap() -- GetAsync; returns the stored data
 local same = guild:get_data()       -- cached copy; throws `not_fetched` until the profile is fetched
 ```
 
-`fetch` prepares and get the current data. It fails with `lockless_locked` (the error carries the lock) if another server holds a **session** lock (a locked profile owns it) and fires `on_lock_lost`. It waits if the key only holds a short **transaction** lock. This uses GetAsync so its cheaper.
+`fetch` prepares and get the current data. It fails with `lockless_locked` (the error carries the lock) if another server holds a **session** lock (a locked profile owns it) and fires `on_lock_lost`, and with `outdated` if a newer server already wrote the record. It waits if the key only holds a short **transaction** lock. This uses GetAsync so its cheaper.
 
 Calling this method is optional, and store can be used without it, but no data will be retrieved until the queued updates flushes (if theres any) 
 

@@ -52,7 +52,7 @@ type Config<T> = {
 (self: Store<T>, key: string, user_ids: { number }) -> Result<Profile<T>>
 ```
 
-Takes the session lock on `key`, resolves any dangling transaction, runs migrations and returns the [Profile](./profile). Yields. Fails with `timeout` (`load_timeout`, carrying the holder's lock), `roblox`, `migration_mismatch`, `tx_marker_invalid`, `already_loaded` or `store_closed`; see [Errors](./errors). `user_ids` is forwarded to the datastore for GDPR tracking.
+Takes the session lock on `key`, resolves any dangling transaction, runs migrations and returns the [Profile](./profile). Yields. Fails with `timeout` (`load_timeout`, carrying the holder's lock), `roblox`, `outdated` (the record was written by a newer server; no lock is taken), `migration_mismatch`, `tx_marker_invalid`, `already_loaded` or `store_closed`; see [Errors](./errors). `user_ids` is forwarded to the datastore for GDPR tracking.
 
 ### `store:wait_loaded(key, user_ids)`
 
@@ -84,7 +84,7 @@ Returns the [LocklessProfile](./lockless-profile) for `key`, creating it if need
 (self: Store<T>, key: string) -> Result<PeekProfile<T>>
 ```
 
-Reads `key` once with `GetAsync` and returns a [PeekProfile](./peek-profile): the stored data (template if missing, migrations applied in memory) and the lock currently on the record, if any. Yields. Takes no lock, writes nothing, and the result is not tracked by the store nor accepted by transactions. Works while another server holds the key. Fails with `roblox`, `migration_mismatch` or `store_closed`.
+Reads `key` once with `GetAsync` and returns a [PeekProfile](./peek-profile): the stored data (template if missing, migrations applied in memory) and the lock currently on the record, if any. Yields. Takes no lock, writes nothing, and the result is not tracked by the store nor accepted by transactions. Works while another server holds the key. Fails with `roblox`, `outdated`, `migration_mismatch` or `store_closed`.
 
 ### `store:transaction(profiles, transform, config?)`
 

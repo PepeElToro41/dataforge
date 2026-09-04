@@ -26,7 +26,7 @@ Profile without a session lock, returned by [`store:get_lockless`](./store#store
 
 Reads the record with `get_async`, resolves any dangling transaction, runs migrations and returns the data. Marks the profile fetched. Yields.
 
-Fails with `lockless_locked` (and fires `on_lock_lost`, closing the profile) if another server holds an unexpired session lock on the key; the error carries that lock. Also `roblox`, `migration_mismatch`, `tx_marker_invalid`, `profile_closed`. Waits while a transaction lock is held.
+Fails with `lockless_locked` (and fires `on_lock_lost`, closing the profile) if another server holds an unexpired session lock on the key; the error carries that lock. Fails with `outdated` (keeping the queue, the profile stays open) if the record was written by a newer server. Also `roblox`, `migration_mismatch`, `tx_marker_invalid`, `profile_closed`. Waits while a transaction lock is held.
 
 ### `profile:get_data()`
 
