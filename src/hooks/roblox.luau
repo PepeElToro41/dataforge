@@ -2,6 +2,7 @@
 --!nolint UnknownGlobal
 
 local types = require "../types"
+local utils = require "../utils"
 
 --[[
 	DataStoreService hook. Only usable inside Roblox.
@@ -17,8 +18,16 @@ function roblox_hook.create(): types.Hook
 
 	self.warn = warn
 
+	-- `game.JobId` is an empty string in Studio, so every Studio session would
+	-- share the same lock owner and transaction id prefix. Generate a random
+	-- one once per hook instead; locks are owned by job id, so it must be stable.
+	local job_id: string = game.JobId
+	if job_id == "" then
+		job_id = `studio-{utils.uuid()}`
+	end
+
 	function self.job_id()
-		return game.JobId :: string
+		return job_id
 	end
 
 	function self.get_datastore(name: string): types.DatastoreHandle

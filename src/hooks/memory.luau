@@ -42,17 +42,6 @@ type Failure = {
 	message: string,
 }
 
-local HEX = "0123456789abcdef"
-
-function random_jobid(): string
-	local chars = table.create(16)
-	for index = 1, 16 do
-		local nibble = math.random(1, 16)
-		chars[index] = string.sub(HEX, nibble, nibble)
-	end
-	return table.concat(chars)
-end
-
 local memory = {}
 
 function memory.create(scheduler: types.Scheduler): MemoryHook
@@ -113,7 +102,7 @@ function memory.create(scheduler: types.Scheduler): MemoryHook
 	end
 
 	-- one id per hook instance: locks are owned by job id, so it must be stable
-	local job_id = random_jobid()
+	local job_id = utils.uuid()
 	function self.job_id()
 		return job_id
 	end
