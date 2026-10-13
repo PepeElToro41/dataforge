@@ -26,7 +26,7 @@ Profile without a session lock, returned by [`store:get_lockless`](./store#store
 
 Reads the record with `get_async`, resolves any dangling transaction, runs migrations and returns the data. Marks the profile fetched. Yields.
 
-Fails with `lockless_locked` (and fires `on_lock_lost`, closing the profile) if another server holds an unexpired session lock on the key; the error carries that lock. Fails with `outdated` (keeping the queue, the profile stays open) if the record was written by a newer server. Also `roblox`, `migration_mismatch`, `tx_marker_invalid`, `profile_closed`. Waits while a transaction lock is held.
+Fails with `lockless_locked` (and fires `on_lock_lost`, closing the profile) if another server holds an unexpired session lock on the key; the error carries that lock. Fails with `outdated` (keeping the queue, the profile stays open) if the record was written by a newer server, and with `predicate_failed` if the stored data does not pass [`config.predicate`](./store#predicate) (nothing is adopted, the profile stays open). Also `roblox`, `migration_mismatch`, `tx_marker_invalid`, `profile_closed`. Waits while a transaction lock is held.
 
 ### `profile:get_data()`
 
@@ -54,7 +54,7 @@ Queues `fn` to run against the **stored** data on the next flush. When the profi
 
 Flushes the queue: fires `on_save`, then applies every queued transform to the stored data in one `update_async` and refreshes the local data with the result. Marks the profile fetched. Yields.
 
-Fails, keeping the queue, with `lockless_locked` if another server holds a live session lock (the profile is closed), or `outdated` if the record lists more migrations than this store declares (written by a newer server). Neither case is retried. Also `roblox`, `migration_mismatch`, `profile_closed`; an error thrown by a queued transform propagates as is.
+Fails, keeping the queue, with `lockless_locked` if another server holds a live session lock (the profile is closed), `outdated` if the record lists more migrations than this store declares (written by a newer server), or `predicate_failed` if the stored data does not pass [`config.predicate`](./store#predicate). None of those is retried. Also `roblox`, `migration_mismatch`, `profile_closed`; an error thrown by a queued transform propagates as is.
 
 The flush loop calls this every `flush_interval` seconds when something is queued.
 

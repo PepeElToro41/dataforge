@@ -120,11 +120,29 @@ declare namespace dataforge {
 		apply: (data: unknown) => unknown;
 	}
 
+	/**
+	 * Decides whether this server may work with a key at all. `data` is the
+	 * raw stored data as it is in storage: `undefined` when the key does not
+	 * exist yet, and with the declared migrations *not* applied. Returning
+	 * `false` rejects the operation with a `predicate_failed` error: no lock
+	 * is taken and nothing is written.
+	 *
+	 * It runs inside the `update_async` transform, so it must be pure: no
+	 * yielding, no storage calls, and no mutation of `data`.
+	 */
+	type Predicate<T = unknown> = (data: T | undefined, key: string) => boolean;
+
 	interface Config<T = unknown> {
 		name: string;
 		template: T;
 
 		migrations?: Migration[];
+
+		/**
+		 * Gate on a key's stored data: every load, save, fetch and peek is
+		 * rejected with `predicate_failed` when it returns `false`.
+		 */
+		predicate?: Predicate<T>;
 
 		/** seconds, default 30 (locked profiles) */
 		autosave_interval?: number;
@@ -142,8 +160,13 @@ declare namespace dataforge {
 		retry_base?: number;
 	}
 
-	/** `Config<T>` with every optional field filled in. */
-	type ResolvedConfig<T = unknown> = Required<Config<T>>;
+	/**
+	 * `Config<T>` with every optional field filled in. `predicate` stays
+	 * optional: a store without one gates nothing.
+	 */
+	type ResolvedConfig<T = unknown> = Required<Omit<Config<T>, "predicate">> & {
+		predicate?: Predicate<T>;
+	};
 
 	interface TransactionConfig {
 		/**
@@ -269,6 +292,21 @@ declare namespace dataforge {
 		readonly declared_migrations: string[];
 	}
 
+	/**
+	 * `config.predicate` returned `false` for a key's stored data: this server
+	 * must not work with that key. Nothing is written and no lock is taken.
+	 */
+	interface PredicateFailedError extends ErrorBase {
+		readonly type: "predicate_failed";
+		readonly key: string;
+		/** The operation the predicate rejected. */
+		readonly op: "load" | "save" | "fetch" | "peek";
+		/** The raw stored data the predicate rejected (`undefined` when the key is empty). */
+		readonly data: unknown;
+		/** The profile the call ran on; `undefined` for `store.load` and `store.peek`. */
+		readonly profile: AnyProfile<any> | undefined;
+	}
+
 	/** Lockless `get_data` before any fetch / flush. Thrown, never returned. */
 	interface NotFetchedError extends ErrorBase {
 		readonly type: "not_fetched";
@@ -335,6 +373,7 @@ declare namespace dataforge {
 		| LocklessLockedError
 		| TxLockLostError
 		| OutdatedError
+		| PredicateFailedError
 		| NotFetchedError
 		| ProfileClosedError
 		| MigrationMismatchError
@@ -387,7 +426,10 @@ declare namespace dataforge {
 		 * (`profile_closed`, or `not_fetched` for a lockless profile).
 		 */
 		get_data(): T;
-		/** Fails with `profile_closed`, `released`, `roblox`, `lock_lost` (locked) or `lockless_locked`, `outdated`, ... (lockless). */
+		/**
+		 * Fails with `profile_closed`, `released`, `roblox`, `predicate_failed`,
+		 * `lock_lost` (locked) or `lockless_locked`, `outdated`, ... (lockless).
+		 */
 		save(): Result<void>;
 		unload(): void;
 		/**
@@ -438,13 +480,14 @@ declare namespace dataforge {
 		/**
 		 * Writes the data and gives the session lock back, keeping the profile
 		 * open so another server may take the key. No-op when already released.
-		 * Fails with `profile_closed`, `roblox` or `lock_lost`.
+		 * Fails with `profile_closed`, `roblox`, `predicate_failed` or `lock_lost`.
 		 */
 		release(): Result<void>;
 		/**
 		 * Takes the session lock again (waits like `load` does) and adopts the
 		 * stored record as the current data. No-op when already locked. Fails
-		 * with `timeout`, `profile_closed`, `roblox`, `outdated`, `migration_mismatch`.
+		 * with `timeout`, `profile_closed`, `roblox`, `outdated`,
+		 * `predicate_failed`, `migration_mismatch`.
 		 */
 		readquire(): Result<void>;
 	}
@@ -461,7 +504,8 @@ declare namespace dataforge {
 		 * Reads the stored record into the local data: migrations are applied,
 		 * then the queued updates replayed on top. Marks the profile fetched.
 		 * Yields. Fails (keeping the queue) with `lockless_locked` if a session
-		 * lock is on the record, `outdated`, `roblox`, `migration_mismatch`, `profile_closed`.
+		 * lock is on the record, `outdated`, `predicate_failed`, `roblox`,
+		 * `migration_mismatch`, `profile_closed`.
 		 */
 		fetch(): Result<T>;
 	}
@@ -487,8 +531,8 @@ declare namespace dataforge {
 		get_data(): T;
 		/**
 		 * Calls `GetAsync` again and replaces `lock`, `pending`, `migrations`
-		 * and the data. Yields. Fails with `roblox`, `outdated` or `migration_mismatch`,
-		 * keeping the previous snapshot.
+		 * and the data. Yields. Fails with `roblox`, `predicate_failed`,
+		 * `outdated` or `migration_mismatch`, keeping the previous snapshot.
 		 */
 		refresh(): Result<T>;
 	}
@@ -515,8 +559,9 @@ declare namespace dataforge {
 
 		/**
 		 * Takes the session lock for `key` and loads it. Yields. Fails with
-		 * `store_closed`, `already_loaded`, `timeout`, `roblox`,
-		 * `outdated`, `migration_mismatch` or `tx_marker_invalid`.
+		 * `store_closed`, `already_loaded`, `timeout`, `roblox`, `outdated`,
+		 * `predicate_failed` (`config.predicate` rejected the stored data; no
+		 * lock is taken), `migration_mismatch` or `tx_marker_invalid`.
 		 */
 		load(key: string, user_ids: number[]): Result<Profile<T>>;
 		/**
@@ -536,8 +581,8 @@ declare namespace dataforge {
 		/**
 		 * Read-only snapshot of `key` via `GetAsync`: the current data and lock.
 		 * Yields. The result is not tracked by the store, takes no lock and
-		 * cannot join a transaction. Fails with `store_closed`, `roblox`, `outdated`
-		 * or `migration_mismatch`.
+		 * cannot join a transaction. Fails with `store_closed`, `roblox`,
+		 * `outdated`, `predicate_failed` or `migration_mismatch`.
 		 */
 		peek(key: string): Result<PeekProfile<T>>;
 

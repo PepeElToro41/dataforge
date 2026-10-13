@@ -1,4 +1,5 @@
 local common = require "./common"
+local errors = require "../errors"
 local result = require "../result"
 local types = require "../types"
 local utils = require "../utils"
@@ -18,12 +19,19 @@ peek_profile.__index = peek_profile
 --- Reads the record with `GetAsync` and adopts it: `lock` and `pending` are
 --- taken as stored, the data gets the declared migrations applied in memory
 --- (nothing is written). A missing key resolves to the template. Throws
---- `roblox`, `outdated` or `migration_mismatch`.
+--- `roblox`, `predicate_failed`, `outdated` or `migration_mismatch`.
 local function read(self: PeekProfile): any
 	local config = self._config
 	local datastore = self._datastore
 
 	local record = utils.get_async(config, datastore, self.key) :: DataRecord?
+
+	-- before anything is adopted: a rejected key leaves the snapshot untouched
+	local stored = if record then record.data else nil
+	local passed, predicate_failure = common.run_predicate(config, self.key, stored)
+	if not passed then
+		error(predicate_failure or errors.predicate_failed(self.key, "peek", stored), 0)
+	end
 
 	self.lock = if record then record.lock else nil
 	self.pending = if record then record.pending else nil
@@ -52,15 +60,15 @@ function peek_profile.get_data(self: PeekProfile)
 end
 
 --- Calls `get_async` again and replaces the snapshot. Yields. Fails with
---- `roblox`, `outdated` or `migration_mismatch`, leaving the previous snapshot
---- in place.
+--- `roblox`, `predicate_failed`, `outdated` or `migration_mismatch`, leaving
+--- the previous snapshot in place.
 function peek_profile.refresh(self: PeekProfile): types.Result<any>
 	return result.capture(read, self)
 end
 
 --- Takes the first snapshot right away (yields). The profile has no mutex, no
 --- loops and no hooks: it is a plain value that can be refreshed. Fails with
---- `roblox`, `outdated` or `migration_mismatch`.
+--- `roblox`, `predicate_failed`, `outdated` or `migration_mismatch`.
 function peek_profile.create(options: PeekOptions): types.Result<PeekProfile>
 	local self = {} :: PeekProfile
 	self.kind = "peek"

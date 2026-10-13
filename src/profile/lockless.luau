@@ -146,8 +146,9 @@ type WriteOptions = types.LocklessWriteOptions
 ---
 --- Throws `lockless_locked` (a live session lock; the profile is closed),
 --- `tx_lock_lost` (closed too), `outdated` (a newer server wrote the record;
---- nothing written), `migration_mismatch`, `roblox`, or whatever a queued
---- dispatcher / migration threw.
+--- nothing written), `predicate_failed` (the store's predicate rejected the
+--- stored data; nothing written), `migration_mismatch`, `roblox`, or whatever
+--- a queued dispatcher / migration threw.
 local function write_queued(self: LocklessProfile, options: WriteOptions)
 	local config = self.config
 	local scheduler = config._scheduler
@@ -203,6 +204,14 @@ local function write_queued(self: LocklessProfile, options: WriteOptions)
 		if common.is_outdated(old, config) then
 			state.outdated = true
 			return nil
+		end
+
+		-- the store's predicate gates the key: a rejected record is not written
+		-- to, and no `pending` of it is resolved
+		local stored = if old then old.data else nil
+		local passed, predicate_failure = common.run_predicate(config, self.key, stored)
+		if not passed then
+			error(predicate_failure or errors.predicate_failed(self.key, "save", stored, self), 0)
 		end
 
 		-- a `pending` left by some transaction (ours after commit, or another
@@ -341,7 +350,8 @@ end
 --- refreshes the local data with the result. Marks the profile fetched.
 --- Fails (keeping the queue) with `lockless_locked` if another server holds a
 --- live session lock (the profile is closed), `outdated` if the record was
---- already written by a newer server, `migration_mismatch`, `roblox` or
+--- already written by a newer server, `predicate_failed` if the store's
+--- predicate rejected the stored data, `migration_mismatch`, `roblox` or
 --- `profile_closed`. An error thrown by a queued dispatcher propagates as is.
 function lockless_profile.save(self: LocklessProfile): types.Result<nil>
 	return result.capture(function()
@@ -417,7 +427,8 @@ end
 --- Reads the stored record (get_async) into the local data: migrations are
 --- applied, then the queued updates replayed on top, so `get_data()` reflects the
 --- local changes still waiting for a save. Marks the profile fetched. Throws
---- (keeping the queue) if any session lock is on the record. Caller holds the mutex.
+--- (keeping the queue) if any session lock is on the record, or if the store's
+--- predicate rejects the stored data. Caller holds the mutex.
 local function read_record(self: LocklessProfile)
 	local config = self.config
 	local datastore = self._datastore
@@ -432,6 +443,13 @@ local function read_record(self: LocklessProfile)
 	-- an expired session lock belongs to a dead server: ignored, the next write clears it
 	-- a transaction lock does not matter for a read: the data under it is the
 	-- data until that transaction's `pending` lands (handled below)
+
+	local stored = if record then record.data else nil
+	local passed, predicate_failure = common.run_predicate(config, self.key, stored)
+	if not passed then
+		-- nothing is adopted: the profile keeps whatever it had and stays open
+		error(predicate_failure or errors.predicate_failed(self.key, "fetch", stored, self), 0)
+	end
 
 	-- a `pending` on the record: find out whether it committed (the record is
 	-- left as is; the next write folds it in)
@@ -455,7 +473,8 @@ local function read_record(self: LocklessProfile)
 end
 
 --- Fails with `lockless_locked` (a session lock is on the record; the profile
---- is closed), `outdated` (a newer server wrote the record), `migration_mismatch`,
+--- is closed), `outdated` (a newer server wrote the record), `predicate_failed`
+--- (the store's predicate rejected the stored data), `migration_mismatch`,
 --- `roblox`, `tx_marker_invalid` or `profile_closed`. An error thrown by a
 --- queued dispatcher propagates as is.
 function lockless_profile.fetch(self: LocklessProfile): types.Result<any>

@@ -40,7 +40,7 @@ Calls `fn` with the current data. Returning a new value replaces the data (fires
 (self: Profile<T>) -> Result<nil>
 ```
 
-Writes the data now (fires `on_save` first) and refreshes the lock. Yields. Fails with `profile_closed`, `released`, `roblox` (storage kept failing after retries) or `lock_lost` (another server took the key: the profile is closed, nothing was written).
+Writes the data now (fires `on_save` first) and refreshes the lock. Yields. Fails with `profile_closed`, `released`, `roblox` (storage kept failing after retries), `predicate_failed` ([`config.predicate`](./store#predicate) rejected the stored data: nothing was written, the lock is kept) or `lock_lost` (another server took the key: the profile is closed, nothing was written).
 
 ### `profile:release()`
 
@@ -48,7 +48,7 @@ Writes the data now (fires `on_save` first) and refreshes the lock. Yields. Fail
 (self: Profile<T>) -> Result<nil>
 ```
 
-Writes the data and gives the session lock back, keeping the profile open so another server may take the key. Afterwards `is_locked` is `false`; `update` / `save` fail with `released`, no autosave runs, the profile cannot join a transaction and `unload` writes nothing. No-op when already released. Fails with `profile_closed`, `roblox` (the lock is still ours, `is_locked` stays `true`) or `lock_lost` (the profile is closed).
+Writes the data and gives the session lock back, keeping the profile open so another server may take the key. Afterwards `is_locked` is `false`; `update` / `save` fail with `released`, no autosave runs, the profile cannot join a transaction and `unload` writes nothing. No-op when already released. Fails with `profile_closed`, `roblox` or `predicate_failed` (the lock is still ours, `is_locked` stays `true`), or `lock_lost` (the profile is closed).
 
 ### `profile:readquire()`
 
@@ -56,7 +56,7 @@ Writes the data and gives the session lock back, keeping the profile open so ano
 (self: Profile<T>) -> Result<nil>
 ```
 
-Takes the session lock again, waiting like `load` does, and adopts the stored record (resolved pending, migrations) as the current data, firing `on_change`. Fails with `timeout` (leaving the profile open and released), `profile_closed`, `roblox`, `outdated` (a newer server wrote the record; no lock is taken, the profile stays released), `migration_mismatch` or `tx_marker_invalid`. No-op when already locked.
+Takes the session lock again, waiting like `load` does, and adopts the stored record (resolved pending, migrations) as the current data, firing `on_change`. Fails with `timeout` (leaving the profile open and released), `profile_closed`, `roblox`, `outdated` (a newer server wrote the record; no lock is taken, the profile stays released), `predicate_failed` (the stored data did not pass [`config.predicate`](./store#predicate); no lock is taken either), `migration_mismatch` or `tx_marker_invalid`. No-op when already locked.
 
 ### `profile:unload()`
 

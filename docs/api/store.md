@@ -10,6 +10,7 @@ type Config<T> = {
 	template: T,
 
 	migrations: { Migration }?,
+	predicate: Predicate<T>?,
 
 	autosave_interval: number?,
 	flush_interval: number?,
@@ -26,6 +27,7 @@ type Config<T> = {
 | `name` | required | Datastore name. |
 | `template` | required | Data a brand new key starts with. |
 | `migrations` | `{}` | Ordered list of `{ name, apply }`. See [Migrations](../guide/migrations). |
+| `predicate` | none | Gate on a key's stored data; a rejected key fails with `predicate_failed`. See [Predicate](#predicate). |
 | `autosave_interval` | `30` | Seconds between autosaves of locked profiles. |
 | `flush_interval` | `autosave_interval` | Seconds between flushes of lockless profiles. |
 | `lock_ttl` | `60` | Seconds a session lock stays valid without refresh. |
@@ -33,6 +35,43 @@ type Config<T> = {
 | `load_poll` | `1` | Seconds between lock polls while waiting in `load`. |
 | `retry_attempts` | `5` | Storage retries per operation. |
 | `retry_base` | `1` | Seconds; exponential backoff base between retries. |
+
+### Predicate
+
+```luau
+type Predicate<T> = (data: T?, key: string) -> boolean
+```
+
+Decides whether this server may work with a key at all. Every call that reads or writes a key runs it against the **raw stored data** first and fails with `predicate_failed` when it returns `false`:
+
+| Call | When it runs | On rejection |
+| --- | --- | --- |
+| `store:load`, `profile:readquire` | Inside the lock's `update_async` transform, before the lock is taken | No lock is taken, nothing is written, no profile is registered. The call does not wait for another server's lock either. |
+| `profile:save` / `release` / autosave / `unload`'s final write | Inside the write's `update_async` transform | Nothing is written. The profile keeps its session lock and stays open, so a later save can go through again (a rejected write during `unload` is reported with `warn` and the lock is left to expire). |
+| `lockless:fetch` | After the `get_async` | Nothing is adopted; the profile stays open and keeps its queue. |
+| `lockless:save` / flush / `unload` | Inside the flush's `update_async` transform | Nothing is written, the queue is kept. |
+| `store:peek`, `peek:refresh` | After the `get_async` | No snapshot is returned; a refresh keeps the previous one. |
+
+```luau
+local store = dataforge.create_store {
+	name = "PlayerData",
+	template = { coins = 0 },
+
+	-- never touch a key some other system has flagged
+	predicate = function(data, key)
+		return data == nil or not data.frozen
+	end,
+}
+
+local result = store:load(key, { player.UserId })
+if not result.success and result.error.type == "predicate_failed" then
+	print(`{result.error.key} rejected on {result.error.op}`, result.error.data)
+end
+```
+
+`data` is the record's data exactly as it is in storage: `nil` when the key does not exist yet (a fresh key is **not** the template at this point) and with the store's migrations *not* applied yet. A write is gated on what is stored, not on the data about to be written.
+
+The predicate runs inside the `update_async` transform, so it must be **pure**: no yielding, no storage calls, no mutation of `data`. It may run more than once per call when storage retries the transform. An error thrown inside it is not treated as a storage failure: the write is cancelled and the error propagates as is (thrown, not returned as a `Result`).
 
 ## Fields
 
@@ -52,7 +91,7 @@ type Config<T> = {
 (self: Store<T>, key: string, user_ids: { number }) -> Result<Profile<T>>
 ```
 
-Takes the session lock on `key`, resolves any dangling transaction, runs migrations and returns the [Profile](./profile). Yields. Fails with `timeout` (`load_timeout`, carrying the holder's lock), `roblox`, `outdated` (the record was written by a newer server; no lock is taken), `migration_mismatch`, `tx_marker_invalid`, `already_loaded` or `store_closed`; see [Errors](./errors). `user_ids` is forwarded to the datastore for GDPR tracking.
+Takes the session lock on `key`, resolves any dangling transaction, runs migrations and returns the [Profile](./profile). Yields. Fails with `timeout` (`load_timeout`, carrying the holder's lock), `roblox`, `outdated` (the record was written by a newer server; no lock is taken), `predicate_failed` ([`config.predicate`](#predicate) rejected the stored data; no lock is taken), `migration_mismatch`, `tx_marker_invalid`, `already_loaded` or `store_closed`; see [Errors](./errors). `user_ids` is forwarded to the datastore for GDPR tracking.
 
 ### `store:wait_loaded(key, user_ids)`
 
@@ -84,7 +123,7 @@ Returns the [LocklessProfile](./lockless-profile) for `key`, creating it if need
 (self: Store<T>, key: string) -> Result<PeekProfile<T>>
 ```
 
-Reads `key` once with `GetAsync` and returns a [PeekProfile](./peek-profile): the stored data (template if missing, migrations applied in memory) and the lock currently on the record, if any. Yields. Takes no lock, writes nothing, and the result is not tracked by the store nor accepted by transactions. Works while another server holds the key. Fails with `roblox`, `outdated`, `migration_mismatch` or `store_closed`.
+Reads `key` once with `GetAsync` and returns a [PeekProfile](./peek-profile): the stored data (template if missing, migrations applied in memory) and the lock currently on the record, if any. Yields. Takes no lock, writes nothing, and the result is not tracked by the store nor accepted by transactions. Works while another server holds the key. Fails with `roblox`, `outdated`, `predicate_failed`, `migration_mismatch` or `store_closed`.
 
 ### `store:transaction(profiles, transform, config?)`
 

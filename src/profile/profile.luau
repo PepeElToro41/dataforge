@@ -30,6 +30,9 @@ local function adquire_lock(load_options: LoadOptions): types.DataRecord
 	-- set by the transform: the record lists more migrations than this server
 	-- declares, so the lock must not be taken (the write is cancelled)
 	local outdated_migrations: { string }? = nil
+	-- set by the transform: the error the store's predicate rejected the record
+	-- with (or the one the predicate itself threw); the lock is not taken
+	local predicate_error: any = nil
 
 	while true do
 		local now = scheduler.now()
@@ -39,8 +42,17 @@ local function adquire_lock(load_options: LoadOptions): types.DataRecord
 			key,
 			function(old: types.DataRecord?): types.DataRecord?
 				outdated_migrations = nil
+				predicate_error = nil
 				if common.is_outdated(old, config) then
 					outdated_migrations = (old :: types.DataRecord).migrations
+					return nil
+				end
+				-- before the lock check on purpose: a key this server must not
+				-- own is rejected right away instead of waiting out its holder
+				local stored = if old then old.data else nil
+				local passed, failure = common.run_predicate(config, key, stored)
+				if not passed then
+					predicate_error = failure or errors.predicate_failed(key, "load", stored)
 					return nil
 				end
 				if common.is_locked_for(old :: types.DataRecord, job_id, now) then
@@ -63,6 +75,9 @@ local function adquire_lock(load_options: LoadOptions): types.DataRecord
 
 		if outdated_migrations ~= nil then
 			error(errors.outdated(key, outdated_migrations, common.all_migration_names(config.migrations)), 0)
+		end
+		if predicate_error ~= nil then
+			error(predicate_error, 0)
 		end
 		if common.is_lock_owned(lock_applied, job_id) then
 			return lock_applied
@@ -151,7 +166,9 @@ type WriteOptions = {
 --- Writes the data (and `pending`, if any) under our session lock, refreshing
 --- or releasing it. Returns true when written; false and the lock now on the
 --- record (nil when none) when the lock is not ours any more, in which case
---- the profile is closed. Throws a `roblox` error when storage fails.
+--- the profile is closed. Throws a `roblox` error when storage fails, or
+--- `predicate_failed` when the store's predicate rejected the stored data
+--- (nothing is written and the lock is kept).
 local function write_data_record(self: Profile, options: WriteOptions): (boolean, types.Lock?)
 	local config = self.config
 	local scheduler = config._scheduler
@@ -163,11 +180,21 @@ local function write_data_record(self: Profile, options: WriteOptions): (boolean
 	-- run more than once when the storage retries it), and the lock it found
 	local applied = false
 	local seen_lock: types.Lock? = nil
+	-- set by the transform: the store's predicate rejected the stored data (or
+	-- threw); the write is cancelled without the lock being lost
+	local predicate_error: any = nil
 
 	local function transform(old: any?): DataRecord?
 		applied = false
+		predicate_error = nil
 		seen_lock = if old then old.lock else nil
 		if not common.is_lock_owned(old, job_id) then
+			return nil
+		end
+		local stored = if old then old.data else nil
+		local passed, failure = common.run_predicate(config, self.key, stored)
+		if not passed then
+			predicate_error = failure or errors.predicate_failed(self.key, "save", stored, self)
 			return nil
 		end
 		applied = true
@@ -200,6 +227,12 @@ local function write_data_record(self: Profile, options: WriteOptions): (boolean
 		end
 
 		error(err, 0)
+	end
+
+	if predicate_error ~= nil then
+		-- the predicate cancelled the write, not a lost lock: the profile keeps
+		-- its lock and stays open, so the next save may go through again
+		error(predicate_error, 0)
 	end
 
 	if not applied then
@@ -416,8 +449,9 @@ function profile.on_lock_lost(self: Profile, callback: () -> ())
 end
 
 --- Writes the data, refreshing the session lock. Fails with `profile_closed`,
---- `released`, `roblox`, or `lock_lost` (another server took the key; the
---- profile is closed).
+--- `released`, `roblox`, `predicate_failed` (the store's predicate rejected
+--- the stored data; nothing is written and the lock is kept), or `lock_lost`
+--- (another server took the key; the profile is closed).
 function profile.save(self: Profile): types.Result<nil>
 	return result.capture(function()
 		common.assert_open(self)
@@ -441,8 +475,8 @@ end
 --- Writes the data and gives the session lock back. The profile stays open
 --- (another server may load the key meanwhile); `update` and `save` fail with
 --- `released` until `readquire`. No-op when already released. Fails with
---- `profile_closed`, `roblox` (the lock stays on the record, `is_locked`
---- stays true) or `lock_lost` (the profile is closed).
+--- `profile_closed`, `roblox` or `predicate_failed` (the lock stays on the
+--- record, `is_locked` stays true), or `lock_lost` (the profile is closed).
 function profile.release(self: Profile): types.Result<nil>
 	return result.capture(function()
 		common.assert_open(self)
@@ -468,8 +502,8 @@ end
 --- Takes the session lock again, waiting for a holder like `load` does, and
 --- adopts the stored record (resolved pending, migrations) as the current
 --- data. Fails with `timeout` (the profile stays open and released),
---- `profile_closed`, `roblox`, `outdated`, `migration_mismatch` or `tx_marker_invalid`. No-op when
---- already locked.
+--- `profile_closed`, `roblox`, `outdated`, `predicate_failed`,
+--- `migration_mismatch` or `tx_marker_invalid`. No-op when already locked.
 function profile.readquire(self: Profile): types.Result<nil>
 	return result.capture(function()
 		common.assert_open(self)

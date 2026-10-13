@@ -48,8 +48,9 @@ export type Store<T = any> = {
 	config: ResolvedConfig<T>,
 	--- Takes the session lock for `key` and loads it. Yields. Fails with
 	--- `store_closed`, `already_loaded`, `timeout`, `roblox`, `outdated` (a
-	--- newer server wrote the record; no lock is taken), `migration_mismatch`
-	--- or `tx_marker_invalid`.
+	--- newer server wrote the record; no lock is taken), `predicate_failed`
+	--- (`config.predicate` rejected the stored data; no lock is taken),
+	--- `migration_mismatch` or `tx_marker_invalid`.
 	load: (self: Store<T>, key: string, user_ids: { number }) -> Result<Profile<T>>,
 	--- Returns the profile for `key`, waiting for it to load or loading it if
 	--- nobody has yet. Waiters get the same Result as the load.
@@ -63,8 +64,8 @@ export type Store<T = any> = {
 
 	--- Read-only snapshot of `key` via `GetAsync`: the current data and lock.
 	--- Yields. The result is not tracked by the store, takes no lock and cannot
-	--- join a transaction. Fails with `store_closed`, `roblox`, `outdated` or
-	--- `migration_mismatch`.
+	--- join a transaction. Fails with `store_closed`, `roblox`, `outdated`,
+	--- `predicate_failed` or `migration_mismatch`.
 	peek: (self: Store<T>, key: string) -> Result<PeekProfile<T>>,
 
 	--- Atomically updates profiles of this store (locked or lockless). `transform`
@@ -158,6 +159,10 @@ function store.create<T>(config: Config<T>): Store<T>
 	assert(type(config) == "table", "datastore: config must be a table")
 	assert(type(config.name) == "string" and #config.name > 0, "datastore: config.name is required")
 	assert(config.template ~= nil, "datastore: config.template is required")
+	assert(
+		config.predicate == nil or type(config.predicate) == "function",
+		"datastore: config.predicate must be a function"
+	)
 
 	local lock_ttl = config.lock_ttl or 60
 	local hook = config._hook
@@ -181,6 +186,7 @@ function store.create<T>(config: Config<T>): Store<T>
 		_scheduler = scheduler,
 
 		migrations = config.migrations or {},
+		predicate = config.predicate,
 
 		autosave_interval = config.autosave_interval or 30,
 		flush_interval = config.flush_interval or config.autosave_interval or 30,

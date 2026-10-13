@@ -39,6 +39,23 @@ profile.is_locked   -- true
 
 While released, `update` and `save` fail with `released`, no autosave runs, the profile cannot join a transaction and `unload` writes nothing. `readquire` waits like `load` (failing with `timeout` the same way) and replaces the local data with the stored record (firing `on_change`).
 
+## Gating keys with a predicate
+
+A store can declare a `predicate`: before any key is locked, written, fetched or peeked, it runs against the **raw stored data** and the key, and a `false` rejects the call with `predicate_failed`.
+
+```luau
+local store = dataforge.create_store {
+	name = "PlayerData",
+	template = { coins = 0 },
+
+	predicate = function(data, key)
+		return data == nil or not data.frozen
+	end,
+}
+```
+
+On a load the check happens inside the lock's `update_async` transform, so a rejected key is never locked (and the load does not wait for another server's lock either). On a save it happens inside the write's transform, so nothing is written while the profile keeps its lock and stays open. The predicate must be pure: it runs inside a transform, may run again when storage retries it, and must not yield. See [Predicate](../api/store#predicate).
+
 ## Events
 
 ```luau

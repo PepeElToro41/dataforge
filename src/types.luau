@@ -5,6 +5,17 @@ export type Counter = () -> number
 --- Returns the new data, or nil / false to leave it untouched.
 export type DataDispatcher<T> = (T) -> (T | false)?
 
+--- Decides whether this server may work with a key at all. `data` is the raw
+--- stored data as it is in storage: nil when the key does not exist yet, and
+--- with the declared migrations *not* applied. Returning false rejects the
+--- operation with a `predicate_failed` error: no lock is taken and nothing is
+--- written.
+---
+--- It runs inside the `update_async` transform, so it must be pure: no
+--- yielding, no storage calls, and no mutation of `data` (it may be retried,
+--- and the data it gets is the record this server is about to write back).
+export type Predicate<T = any> = (data: T?, key: string) -> boolean
+
 --- A storage handle for one named store. Deliberately not shaped like a
 --- Roblox DataStore. All methods throw on failure.
 export type DatastoreHandle = {
@@ -45,6 +56,10 @@ export type Config<T = any> = {
 
 	migrations: Array<Migration>?,
 
+	--- Gate on a key's stored data: every load, save, fetch and peek is
+	--- rejected with `predicate_failed` when it returns false. See `Predicate`.
+	predicate: Predicate<T>?,
+
 	--- seconds, default 30 (locked profiles)
 	autosave_interval: number?,
 	-- seconds, default autosave_interval (lockless profiles)
@@ -77,6 +92,8 @@ export type ResolvedConfig<T = any> = RetryConfig & {
 	_scheduler: Scheduler,
 
 	migrations: Array<Migration>,
+	--- nil when the store declared none (nothing is gated).
+	predicate: Predicate<T>?,
 
 	autosave_interval: number,
 	flush_interval: number,
@@ -210,6 +227,20 @@ export type OutdatedError = {
 	declared_migrations: Array<string>,
 }
 
+--- The store's `predicate` returned false for a key's stored data: this server
+--- must not work with that key. Nothing is written and no lock is taken.
+export type PredicateFailedError = {
+	type: "predicate_failed",
+	message: string,
+	key: string,
+	--- the operation the predicate rejected
+	op: "load" | "save" | "fetch" | "peek",
+	--- the raw stored data the predicate rejected (nil when the key is empty)
+	data: any,
+	--- the profile the call ran on; nil for `store:load` and `store:peek`
+	profile: any?,
+}
+
 export type NotFetchedError = {
 	type: "not_fetched",
 	message: string,
@@ -275,6 +306,7 @@ export type Error =
 	| LocklessLockedError
 	| TxLockLostError
 	| OutdatedError
+	| PredicateFailedError
 	| NotFetchedError
 	| ProfileClosedError
 	| MigrationMismatchError

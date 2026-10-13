@@ -102,6 +102,22 @@ function errors.outdated(
 	}
 end
 
+function errors.predicate_failed(
+	key: string,
+	op: "load" | "save" | "fetch" | "peek",
+	data: any,
+	profile: any?
+): types.PredicateFailedError
+	return make {
+		type = "predicate_failed" :: "predicate_failed",
+		message = `datastore: the store predicate rejected the stored data of "{key}" (on {op})`,
+		key = key,
+		op = op,
+		data = data,
+		profile = profile,
+	}
+end
+
 function errors.not_fetched(profile: any): types.NotFetchedError
 	return make {
 		type = "not_fetched" :: "not_fetched",

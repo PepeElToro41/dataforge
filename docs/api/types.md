@@ -30,6 +30,14 @@ type Migration = {
 }
 ```
 
+### `Predicate<T>`
+
+```luau
+type Predicate<T> = (data: T?, key: string) -> boolean
+```
+
+Gate on a key's raw stored data. See [Predicate](./store#predicate).
+
 ## Storage
 
 ### `Hook`, `DatastoreHandle`, `Scheduler`
@@ -98,4 +106,4 @@ What every fallible call returns. See [Errors](./errors).
 
 ### `Error` ★
 
-Union of every error table (`RobloxError`, `TimeoutError`, `LockLostError`, `ReleasedError`, `LocklessLockedError`, `TxLockLostError`, `OutdatedError`, `NotFetchedError`, `ProfileClosedError`, `MigrationMismatchError`, `TxAbortedError`, `TxMarkerInvalidError`, `StoreClosedError`, `AlreadyLoadedError`), each with a literal `type`. See [Errors](./errors).
+Union of every error table (`RobloxError`, `TimeoutError`, `LockLostError`, `ReleasedError`, `LocklessLockedError`, `TxLockLostError`, `OutdatedError`, `PredicateFailedError`, `NotFetchedError`, `ProfileClosedError`, `MigrationMismatchError`, `TxAbortedError`, `TxMarkerInvalidError`, `StoreClosedError`, `AlreadyLoadedError`), each with a literal `type`. See [Errors](./errors).

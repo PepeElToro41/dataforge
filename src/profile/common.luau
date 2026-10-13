@@ -90,6 +90,18 @@ function common.is_outdated(record: types.DataRecord?, config: types.ResolvedCon
 	return #record.migrations > #config.migrations
 end
 
+function common.run_predicate(config: types.ResolvedConfig, key: string, data: any): (boolean, any?)
+	local predicate = config.predicate
+	if predicate == nil then
+		return true, nil
+	end
+	local ok, passed = pcall(predicate, data, key)
+	if not ok then
+		return false, passed
+	end
+	return not not passed, nil
+end
+
 --- Rethrows a failed `apply_migrations` with the profile attached to an
 --- `outdated` error (a `migration_mismatch` has no profile field).
 function common.raise_migrations(profile: ProfileBase, migrated: MigrationsResult)
