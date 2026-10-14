@@ -8,11 +8,13 @@ local report = testlib.run(
 	require "./store.spec",
 	require "./migrations.spec",
 	require "./profile.spec",
+	require "./session.spec",
 	require "./lockless.spec",
 	require "./peek.spec",
 	require "./predicate.spec",
 	require "./tx.spec",
-	require "./chaining.spec"
+	require "./chaining.spec",
+	require "./api.spec"
 )
 testlib.report(report)
 

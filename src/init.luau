@@ -1,3 +1,5 @@
+local errors = require "@self/errors"
+local result = require "@self/result"
 local store = require "@self/store"
 local tx = require "@self/tx/handle"
 local types = require "@self/types"
@@ -20,6 +22,8 @@ export type ProfileBase<T = any> = types.ProfileBase<T>
 export type PeekProfile<T = any> = types.PeekProfile<T>
 export type Result<T> = types.Result<T>
 export type Error = types.Error
+export type Migration = types.Migration
+export type DataDispatcher<T = any> = types.DataDispatcher<T>
 
 local dataforge = {}
 
@@ -48,6 +52,16 @@ function dataforge.transaction(
 
 	return tx.run(tx.resolve_config(config, defaults), profiles, process)
 end
+
+--- Whether `value` is a dataforge `Error` table (what a failed Result carries
+--- and what the library throws internally). Lets a wrapper around library calls
+--- tell a library error from any other thrown value.
+dataforge.is_error = errors.is
+
+--- The `Result` helpers (`ok`, `err`, `is`, `of`, `capture`), so a game can
+--- build library-shaped results in its own wrappers. `result.err` only accepts
+--- an `Error`, so a malformed result cannot be fabricated with it.
+dataforge.result = result
 
 dataforge.hooks = {
 	memory = memory_hook,

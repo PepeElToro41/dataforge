@@ -29,7 +29,7 @@ declare namespace dataforge {
 
 	/** How a store reaches storage. */
 	interface Hook {
-		/** Identifies this server. Session locks and transaction ids carry it. */
+		/** Identifies this server. Session lock and transaction ids are built from it. */
 		job_id: () => string;
 		/** Returns the handle for a named store. Called once per store name. */
 		get_datastore: (name: string) => DatastoreHandle;
@@ -190,6 +190,12 @@ declare namespace dataforge {
 	*/
 
 	interface Lock {
+		/**
+		 * Identifies the *acquisition* that holds the lock, not the server:
+		 * `{job_id}#{n}` for a profile's session lock, `{job_id}-{n}` for a
+		 * transaction's. Two sessions of one key on the same server hold
+		 * different ids, so they contend like sessions on different servers do.
+		 */
 		id: string;
 		expires: number;
 		/**
@@ -467,6 +473,11 @@ declare namespace dataforge {
 		readonly kind: "locked";
 		readonly last_write: number;
 		/**
+		 * The id of this acquisition's lock; re-stamped unchanged on every
+		 * save, replaced by `readquire`. See `Lock.id`.
+		 */
+		readonly lock_id: string;
+		/**
 		 * Whether the profile currently holds its session lock. True after
 		 * `load`; `release` clears it, `readquire` takes it again. While
 		 * released, `update` / `save` fail with `released` and the profile
@@ -558,8 +569,12 @@ declare namespace dataforge {
 		readonly lockless_profiles: ReadonlyMap<string, LocklessProfile<T>>;
 
 		/**
-		 * Takes the session lock for `key` and loads it. Yields. Fails with
-		 * `store_closed`, `already_loaded`, `timeout`, `roblox`, `outdated`,
+		 * Takes the session lock for `key` and loads it. Yields. A profile that
+		 * is closing no longer counts as loaded: the load waits out its final
+		 * write through the record lock instead of failing `already_loaded`.
+		 *
+		 * Fails with `store_closed`, `already_loaded` (a profile for `key` is
+		 * still open on this store), `timeout`, `roblox`, `outdated`,
 		 * `predicate_failed` (`config.predicate` rejected the stored data; no
 		 * lock is taken), `migration_mismatch` or `tx_marker_invalid`.
 		 */
@@ -599,6 +614,11 @@ declare namespace dataforge {
 			config?: TransactionConfig,
 		): Result<boolean>;
 
+		/**
+		 * Fires for every data change of every profile of this store, including
+		 * the data a key loads with (`oldData === undefined` marks that initial
+		 * value).
+		 */
 		on_change(callback: (profile: AnyProfile<T>, newData: T, oldData: T | undefined) => void): void;
 		on_save(callback: (profile: AnyProfile<T>) => void): void;
 		on_closing(callback: (profile: AnyProfile<T>) => void): void;
@@ -635,6 +655,29 @@ declare namespace dataforge {
 		process: (ctx: TxContext) => boolean | undefined,
 		config?: TransactionConfig,
 	): Result<boolean>;
+
+	/**
+	 * Whether `value` is a dataforge error (what a failed `Result` carries and
+	 * what the library throws internally). Lets a wrapper around library calls
+	 * tell a library error from any other thrown value.
+	 */
+	function is_error(value: unknown): boolean;
+
+	/**
+	 * The `Result` helpers, so you can build library-shaped results in your own
+	 * wrappers. `err` only accepts a dataforge error, so a malformed result
+	 * cannot be built with it.
+	 */
+	namespace result {
+		function ok<T>(value: T): Ok<T>;
+		function err(error: DataforgeError): Err;
+		/** Whether `value` is a `Result`. */
+		function is(value: unknown): boolean;
+		/** `Ok(value)` when `ok`, `Err` when `value` is a dataforge error, rethrown otherwise. */
+		function of<T>(ok: boolean, value: unknown): Result<T>;
+		/** `pcall(fn)` folded through `of`. */
+		function capture<T>(fn: () => T): Result<T>;
+	}
 
 	namespace hooks {
 		namespace memory {

@@ -10,6 +10,7 @@ Session-locked profile, returned by [`store:load`](./store#store-load-key-user-i
 | `key` | `string` | Datastore key. |
 | `open` | `boolean` | `false` once closed; most methods fail with `profile_closed` then. |
 | `is_locked` | `boolean` | Whether the session lock is held. `true` after `load`, `false` after `release`. |
+| `lock_id` | `string` | Id of this acquisition's lock (`{job_id}#{n}`), re-stamped unchanged on every write and replaced by `readquire`. See [Session lock](../guide/profiles#session-lock). |
 | `last_write` | `number` | Time of the last successful write. |
 | `user_ids` | `{ number }` | As passed to `load`. |
 | `migrations` | `{ string }` | Migration names applied to this record. |
@@ -29,7 +30,8 @@ Current data, deep-frozen. Never mutate it. Throws a `profile_closed` error tabl
 ### `profile:update(fn)`
 
 ```luau
-(self: Profile<T>, fn: (T) -> T | false) -> Result<boolean>
+(self: Profile<T>, fn: DataDispatcher<T>) -> Result<boolean>
+-- DataDispatcher<T> = (T) -> (T | false)?
 ```
 
 Calls `fn` with the current data. Returning a new value replaces the data (fires `on_change`, marks dirty); returning `false` or `nil` leaves it untouched. `Ok(true)` when the data changed, `Ok(false)` otherwise. Fails with `profile_closed` or `released` (released). An error thrown by `fn` propagates as is.
@@ -94,7 +96,7 @@ profile:on_lock_lost(function() end)
 
 | Event | Fires when |
 | --- | --- |
-| `change` | The data was replaced: `update`, `readquire`, a committed transaction. |
+| `change` | The data was replaced: `update`, `readquire`, a committed transaction. (The store-level `on_change` also reports the data a key loads with; a profile's own hooks cannot, they are attached after the load.) |
 | `save` | Just before a write (`save`, autosave, `release`, `unload`). |
 | `closing` | At the start of `unload`, while the profile is still open. Last chance to `update` before the final write. |
 | `closed` | Once the profile is closed and its final write, if any, is done. Also after `lock_lost`. |

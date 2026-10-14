@@ -21,7 +21,7 @@ See [Store config](./store#config).
 
 See [TransactionConfig](./transactions#transactionconfig).
 
-### `Migration`
+### `Migration` ★
 
 ```luau
 type Migration = {
@@ -66,7 +66,7 @@ Lockless profile. See [LocklessProfile](./lockless-profile).
 
 Read-only snapshot. See [PeekProfile](./peek-profile).
 
-### `DataDispatcher<T>`
+### `DataDispatcher<T>` ★
 
 ```luau
 type DataDispatcher<T> = (T) -> (T | false)?

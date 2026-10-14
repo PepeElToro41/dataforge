@@ -29,7 +29,7 @@ type Hook = {
 
 | Field | Description |
 | --- | --- |
-| `job_id()` | Identifies this server. Session locks and transaction ids carry it. |
+| `job_id()` | Identifies this server. Session lock ids (`{job_id}#{n}`) and transaction ids (`{job_id}-{n}`) are built from it. |
 | `get_datastore(name)` | Returns the handle for a named store. Called once per store name. |
 | `warn(message)` | Receives non-fatal problems (a hook that threw, a write that could not be released) instead of a global `warn`. |
 

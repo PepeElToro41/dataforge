@@ -63,7 +63,7 @@ TEST("peek profile", function()
 			return other:peek "k"
 		end)
 		CHECK(peek.lock ~= nil)
-		CHECK(peek.lock.id == hook.job_id() and peek.lock.tx == nil)
+		CHECK(peek.lock.id == profile.lock_id and peek.lock.tx == nil)
 		CHECK(peek:get_data().coins == 5)
 
 		helpers.sync(scheduler, function()

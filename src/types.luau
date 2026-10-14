@@ -132,6 +132,10 @@ export type ResolvedTransactionConfig = RetryConfig & {
 }
 
 export type Lock = {
+	--- Identifies the *acquisition* that holds the lock, not the server:
+	--- `{job_id}#{n}` for a profile's session lock, `{job_id}-{n}` for a
+	--- transaction's. Two sessions of one key on the same server hold
+	--- different ids, so they contend like sessions on different servers do.
 	id: string,
 	expires: number,
 	--- Short-lived lock a transaction takes on a lockless key (see `lock_ttl`
@@ -179,7 +183,8 @@ export type TimeoutError = {
 	type: "timeout",
 	message: string,
 	key: string,
-	--- the last lock seen on the record while waiting
+	--- the last lock seen on the record while waiting; its `id` names the
+	--- acquisition holding it, which may be another session on this server
 	lock: Lock?,
 }
 
@@ -431,7 +436,7 @@ export type ProfileBase<T = any> = {
 	unload: (self: ProfileBase<T>) -> (),
 	--- Ok(true) when the data changed, Ok(false) when the dispatcher returned
 	--- nil / false. An error thrown by the dispatcher propagates as is.
-	update: (self: ProfileBase<T>, (T) -> T | false) -> Result<boolean>,
+	update: (self: ProfileBase<T>, dispatcher: DataDispatcher<T>) -> Result<boolean>,
 
 	on_change: (self: ProfileBase<T>, callback: (new: T, old: T?) -> ()) -> (),
 	on_save: (self: ProfileBase<T>, callback: () -> ()) -> (),
@@ -456,6 +461,9 @@ export type ProfileBase<T = any> = {
 export type Profile<T = any> = ProfileBase<T> & {
 	kind: "locked",
 	last_write: number,
+	--- The id of this acquisition's lock; re-stamped unchanged on every save,
+	--- replaced by `readquire`. See `Lock.id`.
+	lock_id: string,
 	--- Whether the profile currently holds its session lock. True after `load`;
 	--- `release` clears it, `readquire` takes it again. While released,
 	--- `update` / `save` throw and the profile cannot join a transaction.
@@ -482,6 +490,13 @@ export type Profile<T = any> = ProfileBase<T> & {
 	-- internal, used by transactions. Returns false (and the lock now on the
 	-- record) when the lock is gone.
 	_write_record: (self: Profile<T>, options: ProfileWriteOptions) -> (boolean, Lock?),
+
+	--- internal, set by the store: called once, as soon as the profile stops
+	--- being usable (an unload before its final write, or a lost lock), so the
+	--- key can be loaded again without waiting for that write.
+	_on_detach: (() -> ())?,
+	--- internal: whether `_on_detach` has run.
+	_detached: boolean,
 }
 
 export type ProfileWriteOptions = {
@@ -529,6 +544,7 @@ export type PeekProfile<T = any> = {
 	_datastore: DatastoreHandle,
 
 	--- Lock currently on the record (session or transaction), nil when free.
+	--- Its `id` names an acquisition, not a server (see `Lock.id`).
 	lock: Lock?,
 	--- Transaction marker on the record, if any. Left as stored, never resolved.
 	pending: Pending<T>?,

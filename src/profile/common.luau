@@ -122,10 +122,12 @@ function common.is_lock_owned(record: types.DataRecord?, job_id: string)
 		return false
 	end
 
-	return lock.id == job_id
+	return lock.id == lock_id
 end
 
-function common.is_locked_for(record: types.DataRecord?, job_id: string, now: number)
+--- Whether a live lock of another acquisition holds the record, in which case
+--- `lock_id` must wait it out or steal it once it expires.
+function common.is_locked_for(record: types.DataRecord?, lock_id: string, now: number)
 	if not record then
 		return false
 	end
@@ -134,7 +136,7 @@ function common.is_locked_for(record: types.DataRecord?, job_id: string, now: nu
 		return false
 	end
 
-	return lock.id ~= job_id and lock.expires > now
+	return lock.id ~= lock_id and lock.expires > now
 end
 
 function common.has_lock(record: types.DataRecord?)

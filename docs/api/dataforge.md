@@ -37,6 +37,35 @@ Atomically updates any set of profiles, across stores and mixing locked and lock
 
 See [Transactions](./transactions).
 
+### `dataforge.is_error(value)`
+
+```luau
+function dataforge.is_error(value: any): boolean
+```
+
+Whether `value` is a dataforge [`Error`](./errors) table — what a failed `Result` carries and what the library throws internally. Use it in your own `pcall` wrappers to tell a library error from any other thrown value:
+
+```luau
+local ok, err = pcall(function()
+	return store:load(key, {}):unwrap()
+end)
+if not ok and dataforge.is_error(err) then
+	warn(`dataforge {err.type}: {err.message}`)
+end
+```
+
+### `dataforge.result`
+
+The [`Result`](./errors) helpers, so you can build library-shaped results in your own wrappers.
+
+| Function | Description |
+| --- | --- |
+| `result.ok(value)` | `Ok(value)`. |
+| `result.err(error)` | `Err(error)`. Asserts that `error` is a dataforge `Error`, so a malformed result cannot be built. |
+| `result.is(value)` | Whether `value` is a `Result`. |
+| `result.of(ok, value)` | A `pcall` outcome as a `Result`: `Ok` when `ok`, `Err` when `value` is an `Error`, rethrown otherwise. |
+| `result.capture(fn, ...)` | `pcall(fn, ...)` folded through `of`. |
+
 ## Namespaces
 
 `dataforge.hooks` and `dataforge.schedulers` hold the storage and time backends used to run the library outside Roblox. See [Hooks](./hooks).
@@ -54,6 +83,8 @@ export type ProfileBase<T = any>
 export type PeekProfile<T = any>
 export type Result<T>
 export type Error
+export type Migration
+export type DataDispatcher<T = any>
 ```
 
 See [Types](./types).

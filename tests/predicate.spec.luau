@@ -115,7 +115,7 @@ TEST("store predicate", function()
 		end)
 		CHECK(handle.done)
 		CHECK(helpers.err(handle, "predicate_failed").op == "load")
-		CHECK(helpers.record(hook, "k").lock.id == other.config._hook.job_id())
+		CHECK(helpers.record(hook, "k").lock.id == held.lock_id)
 	end)
 
 	CASE("wait_loaded waiters get the rejection too", function()

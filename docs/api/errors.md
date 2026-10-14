@@ -57,7 +57,7 @@ Narrow on `type`. The `profile` and `store` fields hold the object the error is 
 | `tx_aborted` | `id: string`, `cause: Error?` | The transaction aborted. `cause` is the error of the participant that failed phase 1 (`roblox`, `lock_lost`, `tx_lock_lost`, ...); `nil` when the marker was already resolved as aborted by another server. |
 | `tx_marker_invalid` | `id: string`, `value: any` | The marker datastore holds something other than `"committed"` / `"aborted"`. |
 | `store_closed` | `store` | `store:close()` ran. |
-| `already_loaded` | `store`, `key: string` | A locked profile for `key` is open (or loading) on this store. |
+| `already_loaded` | `store`, `key: string` | A locked profile for `key` is open (or loading) on this store. A profile that is closing does not count: loading the key again waits for its final write. |
 
 ## Who returns what
 

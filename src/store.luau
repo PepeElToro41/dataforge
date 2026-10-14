@@ -80,6 +80,8 @@ export type Store<T = any> = {
 		config: types.TransactionConfig?
 	) -> Result<boolean>,
 
+	--- Fires for every data change of every profile of this store, including
+	--- the data a key loads with (`old == nil` marks that initial value).
 	on_change: (self: Store<T>, callback: (profile: Profile<T>, new: T, old: T?) -> ()) -> (),
 	on_save: (self: Store<T>, callback: (profile: Profile<T>) -> ()) -> (),
 	on_closing: (self: Store<T>, callback: (profile: Profile<T>) -> ()) -> (),
@@ -114,6 +116,9 @@ local function insert_loaded_lock(self: Store, key: string)
 	table.insert(waiters, thread)
 end
 
+--- Drops `profile` from the registry, unless the key has already been taken by
+--- a newer one: with instant detach a new profile may be registered while the
+--- old one is still writing, and the old one's late unregister must not evict it.
 local function unregister_profile(self: Store, profile: Profile)
 	local key = profile.key
 	if self.profiles[key] == profile then
@@ -225,7 +230,10 @@ function store.load(self: Store, key: string, user_ids: { number }): Result<Prof
 	if self.closed then
 		return result.err(errors.store_closed(self))
 	end
-	if self.profiles[key] ~= nil or self._loading[key] then
+	-- a closing profile detaches before its final write, so it is normally gone
+	-- from the registry already; the `open` check is belt and braces
+	local existing = self.profiles[key]
+	if (existing ~= nil and existing.open) or self._loading[key] then
 		return result.err(errors.already_loaded(self, key))
 	end
 	self._loading[key] = true
@@ -258,12 +266,24 @@ function store.load(self: Store, key: string, user_ids: { number }): Result<Prof
 		return failure
 	end
 
+	-- dropped from the registry the moment it stops being usable, so the key can
+	-- be loaded again while the old session's final write is still in flight
+	loaded._on_detach = function()
+		unregister_profile(self, loaded)
+	end
+	-- safety net: a profile that closes some other way still unregisters
 	loaded:on_closed(function()
 		unregister_profile(self, loaded)
 	end)
 	forward_hooks(self, loaded)
 
 	self.profiles[key] = loaded
+	-- a load's initial data never reaches the profile's own hooks (they are
+	-- attached after `profile.load` set it), so report it here: `old == nil`
+	-- marks a key that just appeared. Lockless profiles need no equivalent:
+	-- `get_lockless` forwards their hooks before any `fetch` sets data.
+	fire_hooks(self, self._hooks.change, loaded, loaded:get_data(), nil)
+
 	local success = result.ok(loaded)
 	resume_load_locks(self, key, success)
 	return success
@@ -430,10 +450,21 @@ function store.close(self: Store)
 		end)
 	end
 
+	-- snapshots: `unload` spawns a thread that runs up to its first yield right
+	-- away, and a detaching profile removes itself from these tables
+	local locked: Array<Profile> = {}
 	for _, profile in self.profiles do
+		table.insert(locked, profile)
+	end
+	local lockless: Array<LocklessProfile> = {}
+	for _, profile in self.lockless_profiles do
+		table.insert(lockless, profile)
+	end
+
+	for _, profile in locked do
 		unload(profile)
 	end
-	for _, profile in self.lockless_profiles do
+	for _, profile in lockless do
 		unload(profile)
 	end
 	for key in self._loading do

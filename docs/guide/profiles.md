@@ -21,7 +21,9 @@ Every fallible method returns a [`Result`](../api/errors): check `success`, read
 
 The lock lives inside the stored record as `{ id, expires }`. `load` takes it with a compare-and-set `update_async`, every later write checks that `lock.id` is still ours, and the autosave loop pushes `expires` forward. If a write finds a different id the lock was lost: the profile closes, `on_lock_lost` fires and nothing is written. The `save` or `release` that found out fails with `lock_lost`, carrying the lock now on the record (the thief's, or `nil` when it was wiped).
 
-Loading a key that is locked by another server waits (polling every `load_poll` seconds) until the lock is released or expires, and fails with `timeout` after `load_timeout` seconds; the error carries the holder's lock.
+`lock.id` identifies the **acquisition**, not the server: it is `{job_id}#{n}`, with a counter that moves on every `load` and `readquire` (the profile keeps it in `profile.lock_id`). So two sessions of one key on the same server hold different ids and contend through the record exactly like sessions on two servers do — one waits for the other's final write instead of writing over it.
+
+Loading a key that is locked elsewhere waits (polling every `load_poll` seconds) until the lock is released or expires, and fails with `timeout` after `load_timeout` seconds; the error carries the holder's lock.
 
 ### Release and readquire
 
@@ -73,6 +75,8 @@ store:on_change(function(profile, new, old) end)
 store:on_lock_lost(function(profile) end)
 ```
 
+The store's `on_change` also reports the data a key loads with, with `old == nil`, before any `wait_loaded` waiter resumes — a profile's own `on_change` cannot, since it is attached after the load set the data. So a single store-level listener sees every value a key ever has, and nothing needs reconciling by hand after `load` returns.
+
 ## Waiting
 
 - `profile:wait_settled()` yields until no operation holds or waits on the profile. After it returns the next `update` is guaranteed not to yield.
@@ -81,7 +85,9 @@ store:on_lock_lost(function(profile) end)
 
 ## Loading the same key twice
 
-`store:load` fails with `already_loaded` if the key is already loaded on this store. Use `store:get_loaded(key)` to look up an open profile and `store:wait_loaded` to wait for a load that is in progress.
+`store:load` fails with `already_loaded` while a profile for the key is **open** on this store. Use `store:get_loaded(key)` to look up an open profile and `store:wait_loaded` to wait for a load that is in progress.
+
+A profile that is closing does not count: `unload` drops it from the store before its final write, so loading the key again right away (a player who leaves and rejoins the same server) is allowed. That load waits on the record lock until the final write lands, then loads the data it wrote — it may take up to one `load_poll` tick.
 
 ## Peeking without a lock
 

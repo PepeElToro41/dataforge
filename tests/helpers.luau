@@ -57,6 +57,16 @@ function helpers.server(hook: Hook): types.Hook
 	}
 end
 
+--- Whether `lock` was taken by a session acquisition of `hook`'s server: lock
+--- ids are per acquisition (`{job_id}#{n}`), so a job id is only a prefix.
+--- Prefer comparing with a profile's `lock_id` when the profile is at hand.
+function helpers.locked_by(lock: any, hook: types.Hook): boolean
+	if lock == nil then
+		return false
+	end
+	return string.find(lock.id, `{hook.job_id()}#`, 1, true) == 1
+end
+
 function helpers.run(scheduler: Scheduler, fn: () -> ...any): Handle
 	local handle: Handle = { done = false, ok = false, result = nil, thread = nil }
 	handle.thread = scheduler.spawn(function()

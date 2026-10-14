@@ -15,12 +15,22 @@ export type LoadOptions = types.LoadOptions
 local profile = {}
 profile.__index = profile
 
-local function adquire_lock(load_options: LoadOptions): types.DataRecord
+--- One counter per process: a lock id must be unique per acquisition, not per
+--- server, so two sessions of the same key on this server can tell their locks
+--- apart. `#` keeps them out of the transaction id namespace (`{job_id}-{n}`),
+--- which lockless writes compare by id.
+local lock_counter = utils.counter()
+
+--- Takes the session lock on `key`, waiting out (or stealing by expiry) any
+--- holder. Returns the locked record and the id this acquisition stamped on it.
+local function adquire_lock(load_options: LoadOptions): (types.DataRecord, string)
 	local config = load_options.config
 	local user_ids = load_options.user_ids
 	local datastore = load_options._datastore
-	local job_id = config._hook.job_id()
 	local key = load_options.key
+	-- minted once per acquisition, before the loop: waiting may write the lock
+	-- several times and every attempt must stamp the same id
+	local lock_id = `{config._hook.job_id()}#{lock_counter()}`
 
 	local scheduler = config._scheduler
 
@@ -55,7 +65,7 @@ local function adquire_lock(load_options: LoadOptions): types.DataRecord
 					predicate_error = failure or errors.predicate_failed(key, "load", stored)
 					return nil
 				end
-				if common.is_locked_for(old :: types.DataRecord, job_id, now) then
+				if common.is_locked_for(old :: types.DataRecord, lock_id, now) then
 					return nil
 				end
 				local record: types.DataRecord = old or {} :: types.DataRecord
@@ -65,7 +75,7 @@ local function adquire_lock(load_options: LoadOptions): types.DataRecord
 					pending = record.pending,
 					migrations = record.migrations or {},
 					lock = {
-						id = job_id,
+						id = lock_id,
 						expires = now + config.lock_ttl,
 					},
 				}
@@ -79,8 +89,8 @@ local function adquire_lock(load_options: LoadOptions): types.DataRecord
 		if predicate_error ~= nil then
 			error(predicate_error, 0)
 		end
-		if common.is_lock_owned(lock_applied, job_id) then
-			return lock_applied
+		if common.is_lock_owned(lock_applied, lock_id) then
+			return lock_applied, lock_id
 		end
 		last_lock = if lock_applied then lock_applied.lock else nil
 
@@ -93,7 +103,7 @@ local function adquire_lock(load_options: LoadOptions): types.DataRecord
 			local current = utils.get_async(config, datastore, key) :: types.DataRecord?
 			last_lock = if current then current.lock else nil
 
-			if not common.is_locked_for(current, job_id, scheduler.now()) then
+			if not common.is_locked_for(current, lock_id, scheduler.now()) then
 				break
 			end
 		end
@@ -145,6 +155,18 @@ local function set_data(self: Profile, data: any)
 	fire_hooks(self, self._hooks.change, new, old)
 end
 
+--- Lets the store drop the key as soon as the profile stops being usable,
+--- without waiting for the final write to land. Idempotent: a lost lock
+--- followed by an unload must only detach once.
+local function detach(self: Profile)
+	local on_detach = self._on_detach
+	if on_detach == nil or self._detached then
+		return
+	end
+	self._detached = true
+	on_detach()
+end
+
 --- Another server took the key: the profile closes without a release write.
 --- Runs inside a write (mutex held by the caller), so it only closes the mutex:
 --- the holder finishes, everything waiting on it is rejected.
@@ -153,6 +175,7 @@ local function process_lock_lost(self: Profile)
 		return
 	end
 	self.open = false
+	detach(self)
 	self._mutex:close(errors.profile_closed(self, "lock_lost"))
 	fire_hooks(self, self._hooks.lock_lost)
 	fire_hooks(self, self._hooks.closed)
@@ -174,7 +197,9 @@ local function write_data_record(self: Profile, options: WriteOptions): (boolean
 	local scheduler = config._scheduler
 	local datastore = self._datastore
 	local now = scheduler.now()
-	local job_id = config._hook.job_id()
+	-- this acquisition's id, not the job id: another session of this key on this
+	-- server holds a different lock and must not be written over
+	local lock_id = self.lock_id
 
 	-- set by the transform: whether the write went through (the transform may
 	-- run more than once when the storage retries it), and the lock it found
@@ -188,7 +213,7 @@ local function write_data_record(self: Profile, options: WriteOptions): (boolean
 		applied = false
 		predicate_error = nil
 		seen_lock = if old then old.lock else nil
-		if not common.is_lock_owned(old, job_id) then
+		if not common.is_lock_owned(old, lock_id) then
 			return nil
 		end
 		local stored = if old then old.data else nil
@@ -202,7 +227,9 @@ local function write_data_record(self: Profile, options: WriteOptions): (boolean
 		local new_lock: types.Lock? = nil
 		if not options.release then
 			new_lock = {
-				id = job_id,
+				-- the same id every time: a fresh one would look like a new lock
+				-- to everyone else
+				id = lock_id,
 				expires = now + config.lock_ttl,
 				tx = nil,
 			} :: types.Lock
@@ -255,16 +282,16 @@ local function write_data_record(self: Profile, options: WriteOptions): (boolean
 	return true
 end
 
---- Gives the lock taken by `adquire_lock` back, leaving the record otherwise
---- untouched. Used when the load fails after locking; a failure here is only
---- warned about (the lock expires on its own).
-local function release_lock(load_options: LoadOptions)
+--- Gives the lock `lock_id` (taken by `adquire_lock`) back, leaving the record
+--- otherwise untouched. Used when the load fails after locking; a failure here
+--- is only warned about (the lock expires on its own). Takes the acquisition id
+--- so a failed load cannot clear a lock another local acquisition just took.
+local function release_lock(load_options: LoadOptions, lock_id: string)
 	local config = load_options.config
-	local job_id = config._hook.job_id()
 
 	local ok, err = utils.try(function()
 		utils.update_async(config, load_options._datastore, load_options.key, function(old: DataRecord?): DataRecord?
-			if not common.is_lock_owned(old, job_id) then
+			if not common.is_lock_owned(old, lock_id) then
 				return nil
 			end
 			local record = old :: DataRecord
@@ -331,8 +358,8 @@ end
 
 --- Takes the session lock and resolves the locked record into data. If the
 --- resolution fails the lock is given back before rethrowing.
-local function adquire_and_resolve(load_options: LoadOptions): (any, { string }, boolean)
-	local record = adquire_lock(load_options)
+local function adquire_and_resolve(load_options: LoadOptions): (any, { string }, boolean, string)
+	local record, lock_id = adquire_lock(load_options)
 	local config = load_options.config
 
 	-- from here on the key is locked: anything failing must give it back
@@ -342,10 +369,10 @@ local function adquire_and_resolve(load_options: LoadOptions): (any, { string },
 		config._hook.warn(
 			`datastore: load of "{load_options.key}" failed after taking its lock, releasing it: {tostring(err)}`
 		)
-		release_lock(load_options)
+		release_lock(load_options, lock_id)
 		error(err, 0)
 	end
-	return data, new_migrations, dirty
+	return data, new_migrations, dirty, lock_id
 end
 
 local function load_options_of(self: Profile): LoadOptions
@@ -364,7 +391,7 @@ local function assert_locked(self: Profile)
 end
 
 function profile.load(load_options: LoadOptions): Profile
-	local data, new_migrations, dirty = adquire_and_resolve(load_options)
+	local data, new_migrations, dirty, lock_id = adquire_and_resolve(load_options)
 	local config = load_options.config
 
 	local self: Profile = {} :: any
@@ -374,6 +401,8 @@ function profile.load(load_options: LoadOptions): Profile
 	self._datastore = load_options._datastore
 	self.open = true
 	self.is_locked = true
+	self.lock_id = lock_id
+	self._detached = false
 
 	self.config = load_options.config
 	self.migrations = new_migrations
@@ -515,7 +544,7 @@ function profile.readquire(self: Profile): types.Result<nil>
 			if self.is_locked then
 				return
 			end
-			local ok, data, new_migrations, dirty = pcall(adquire_and_resolve, load_options_of(self))
+			local ok, data, new_migrations, dirty, lock_id = pcall(adquire_and_resolve, load_options_of(self))
 			if not ok then
 				local err: any = data
 				if errors.is(err) and err.type == "outdated" then
@@ -525,6 +554,9 @@ function profile.readquire(self: Profile): types.Result<nil>
 			end
 
 			self.migrations = new_migrations
+			-- a fresh acquisition, so a fresh id (the released profile kept the
+			-- old one; nothing could be written with it while released)
+			self.lock_id = lock_id
 			set_data(self, data)
 			self._dirty = dirty
 			self.last_write = self.config._scheduler.now()
@@ -545,6 +577,9 @@ function profile.unload(self: Profile)
 	end
 
 	self.open = false
+	-- before the release write (which may take seconds under throttling): the
+	-- key is free to be loaded again, the new load waits on the record lock
+	detach(self)
 	self._mutex:lock()
 	self._mutex:close(errors.profile_closed(self, "unloaded"))
 	local ok, err = utils.try(function()

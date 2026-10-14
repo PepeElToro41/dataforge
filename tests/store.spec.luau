@@ -191,13 +191,14 @@ TEST("store", function()
 		local a = helpers.sync(scheduler, function()
 			return store:load("a", {})
 		end)
-		-- the initial set_data happens before forwarding is attached
-		CHECK(#log == 0)
+		-- the profile's own hooks are attached after `load` set the data, so the
+		-- store reports the initial value itself (with no old data)
+		CHECK(#log == 1 and log[1] == "change:a:0:nil", table.concat(log, ","))
 		helpers.sync(scheduler, function()
 			a:update(helpers.set(5)):unwrap()
 			a:save():unwrap()
 		end)
-		CHECK(log[1] == "change:a:5:0" and log[2] == "save:a", table.concat(log, ","))
+		CHECK(log[2] == "change:a:5:0" and log[3] == "save:a", table.concat(log, ","))
 
 		local g = store:get_lockless("g", {})
 		helpers.sync(scheduler, function()
@@ -205,17 +206,52 @@ TEST("store", function()
 			g:update(helpers.add(2)):unwrap()
 			g:save():unwrap()
 		end)
-		CHECK(log[3] == "change:g:0:nil" and log[4] == "change:g:2:0" and log[5] == "save:g", table.concat(log, ","))
+		CHECK(log[4] == "change:g:0:nil" and log[5] == "change:g:2:0" and log[6] == "save:g", table.concat(log, ","))
 		-- the save writes the queue and re-sets the data from what landed
-		CHECK(log[6] == "change:g:2:2", table.concat(log, ","))
+		CHECK(log[7] == "change:g:2:2", table.concat(log, ","))
 
 		helpers.sync(scheduler, function()
 			a:unload()
 			g:unload()
 		end)
-		CHECK(log[7] == "closing:a" and log[8] == "closed:a", table.concat(log, ","))
-		CHECK(log[9] == "closing:g" and log[10] == "closed:g", table.concat(log, ","))
-		CHECK(#log == 10, table.concat(log, ","))
+		CHECK(log[8] == "closing:a" and log[9] == "closed:a", table.concat(log, ","))
+		CHECK(log[10] == "closing:g" and log[11] == "closed:g", table.concat(log, ","))
+		CHECK(#log == 11, table.concat(log, ","))
+	end)
+
+	CASE("store on_change reports the data a key loads with, before waiters resume", function()
+		-- before the store: its datastore handle captures the backend table
+		hook.data[helpers.STORE] = { k = { data = { coins = 4 }, migrations = {} } }
+		local store = helpers.make_store(hook, scheduler)
+		local log: { string } = {}
+		store:on_change(function(profile, new, old)
+			table.insert(log, `{profile.key}:{new.coins}:{if old then tostring(old.coins) else "nil"}`)
+		end)
+
+		hook.latency = 1
+		local load = helpers.run(scheduler, function()
+			return store:load("k", {})
+		end)
+		local waiter = helpers.run(scheduler, function()
+			local waited = store:wait_loaded("k", {}):unwrap()
+			table.insert(log, `waiter:{waited:get_data().coins}`)
+		end)
+		helpers.tick(scheduler, 3)
+		local profile = helpers.finished(load, "load")
+		helpers.finished(waiter, "wait_loaded")
+		-- the initial change is reported once, before any waiter resumes
+		CHECK(log[1] == "k:4:nil" and log[2] == "waiter:4", table.concat(log, ","))
+
+		hook.latency = 0
+		helpers.sync(scheduler, function()
+			profile:update(helpers.set(6)):unwrap()
+		end)
+		-- later changes still carry the previous data
+		CHECK(#log == 3 and log[3] == "k:6:4", table.concat(log, ","))
+
+		helpers.sync(scheduler, function()
+			profile:unload()
+		end)
 	end)
 
 	CASE("lock_lost forwards for locked and lockless profiles", function()
@@ -262,7 +298,8 @@ TEST("store", function()
 			return a:update(helpers.set(1))
 		end)
 		CHECK(ok == true and a:get_data().coins == 1)
-		CHECK(after == 1)
+		-- the load's initial data and the update
+		CHECK(after == 2)
 	end)
 
 	CASE("close unloads every profile, waits for them and rejects everything after", function()

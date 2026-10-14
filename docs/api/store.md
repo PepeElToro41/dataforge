@@ -91,7 +91,9 @@ The predicate runs inside the `update_async` transform, so it must be **pure**: 
 (self: Store<T>, key: string, user_ids: { number }) -> Result<Profile<T>>
 ```
 
-Takes the session lock on `key`, resolves any dangling transaction, runs migrations and returns the [Profile](./profile). Yields. Fails with `timeout` (`load_timeout`, carrying the holder's lock), `roblox`, `outdated` (the record was written by a newer server; no lock is taken), `predicate_failed` ([`config.predicate`](#predicate) rejected the stored data; no lock is taken), `migration_mismatch`, `tx_marker_invalid`, `already_loaded` or `store_closed`; see [Errors](./errors). `user_ids` is forwarded to the datastore for GDPR tracking.
+Takes the session lock on `key`, resolves any dangling transaction, runs migrations and returns the [Profile](./profile). Yields. Fails with `timeout` (`load_timeout`, carrying the holder's lock), `roblox`, `outdated` (the record was written by a newer server; no lock is taken), `predicate_failed` ([`config.predicate`](#predicate) rejected the stored data; no lock is taken), `migration_mismatch`, `tx_marker_invalid`, `already_loaded` (a profile for `key` is still open on this store) or `store_closed`; see [Errors](./errors). `user_ids` is forwarded to the datastore for GDPR tracking.
+
+A profile that is closing is not "already loaded": `unload` drops it from the store before its final write, so this call takes the key as soon as that write lands (waiting on the record lock meanwhile). See [Loading the same key twice](../guide/profiles#loading-the-same-key-twice).
 
 ### `store:wait_loaded(key, user_ids)`
 
@@ -149,6 +151,8 @@ Unloads every open profile (locked and lockless) and marks the store closed. Mea
 ## Events
 
 Each fires for every profile of the store, with the profile as first argument.
+
+`on_change` also reports the data a key loads with, right after `store:load` registered the profile and before any `wait_loaded` waiter resumes; that first call has `old == nil`. Locked profiles cannot report it themselves (their hooks are attached after the load set the data), so this is the place to reconcile a key's initial state.
 
 ```luau
 store:on_change(function(profile, new, old) end)

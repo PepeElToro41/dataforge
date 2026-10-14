@@ -75,7 +75,7 @@ type Pending<T> = {
 }
 
 type Lock = {
-	id: string,
+	id: string,      -- the acquisition holding it: "{job_id}#{n}" (session) or "{job_id}-{n}" (transaction)
 	expires: number,
 	tx: boolean?,    -- true: short transaction lock on a lockless key
 }

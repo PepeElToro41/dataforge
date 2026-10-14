@@ -374,12 +374,9 @@ TEST("lockless profile", function()
 			end),
 			"lockless_locked"
 		)
-		CHECK(err.lock.id == locked_store._hook.job_id())
+		CHECK(err.lock.id == locked.lock_id)
 		CHECK(not g.open)
-		CHECK(
-			helpers.record(hook, "g").data.coins == 3
-				and helpers.record(hook, "g").lock.id == locked_store._hook.job_id()
-		)
+		CHECK(helpers.record(hook, "g").data.coins == 3 and helpers.record(hook, "g").lock.id == locked.lock_id)
 		CHECK(locked.open)
 	end)
 
