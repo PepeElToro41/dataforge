@@ -112,7 +112,9 @@ function common.raise_migrations(profile: ProfileBase, migrated: MigrationsResul
 	error(err, 0)
 end
 
-function common.is_lock_owned(record: types.DataRecord?, job_id: string)
+--- Whether `lock_id` (the id of one acquisition) is the lock currently on
+--- the record, so this acquisition may write it.
+function common.is_lock_owned(record: types.DataRecord?, lock_id: string)
 	if not record then
 		return false
 	end
