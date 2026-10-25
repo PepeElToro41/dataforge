@@ -8,15 +8,33 @@ importers:
 
   .:
     devDependencies:
+      '@rbxts/compiler-types':
+        specifier: 3.0.0-types.0
+        version: 3.0.0-types.0
       '@rbxts/types':
         specifier: ^1.0.947
         version: 1.0.947
+      typescript:
+        specifier: 5.5.3
+        version: 5.5.3
 
 packages:
+
+  '@rbxts/compiler-types@3.0.0-types.0':
+    resolution: {integrity: sha512-VGOHJPoL7+56NTatMGqQj3K7xWuzEV+aP4QD5vZiHu+bcff3kiTmtoadaF6NkJrmwfFAvbsd4Dg764ZjWNceag==}
 
   '@rbxts/types@1.0.947':
     resolution: {integrity: sha512-NAGa6dAvP6kD3mNNZUnwTDenzqgbK7kbCp1ZXgTuKN+sH0AoO5M32TAFfdGbOCMkSysl3YhHc+B0PA6oGMCkAA==}
 
+  typescript@5.5.3:
+    resolution: {integrity: sha512-/hreyEujaB0w76zKo6717l3L0o/qEUtRgdvUBvlkhoWeOVMjMuHNHk0BRBzikzuGDqNmPQbg5ifMEqsHLiIUcQ==}
+    engines: {node: '>=14.17'}
+    hasBin: true
+
 snapshots:
 
+  '@rbxts/compiler-types@3.0.0-types.0': {}
+
   '@rbxts/types@1.0.947': {}
+
+  typescript@5.5.3: {}

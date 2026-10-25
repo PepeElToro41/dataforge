@@ -115,10 +115,15 @@ declare namespace dataforge {
 		Configuration
 	*/
 
-	interface Migration {
+	/** A named migration whose output can be checked against a target schema. */
+	interface Migration<T = unknown> {
 		name: string;
-		apply: (data: unknown) => unknown;
+		/** Stored data may have an older shape; narrow it before reading fields. */
+		apply: (data: unknown) => T;
 	}
+
+	/** Earlier steps may return intermediate shapes; the last must return T. */
+	type Migrations<T = unknown> = [] | [...Migration[], Migration<T>];
 
 	/**
 	 * Decides whether this server may work with a key at all. `data` is the
@@ -136,7 +141,8 @@ declare namespace dataforge {
 		name: string;
 		template: T;
 
-		migrations?: Migration[];
+		/** The final output must match the template, rather than influence its inference. */
+		migrations?: Migrations<NoInfer<T>>;
 
 		/**
 		 * Gate on a key's stored data: every load, save, fetch and peek is

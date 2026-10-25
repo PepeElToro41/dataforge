@@ -17,6 +17,9 @@
   ],
   "main": "src/init.luau",
   "types": "index.d.ts",
+  "scripts": {
+    "test:types": "tsc --project tests/types/tsconfig.json"
+  },
   "files": [
     "src",
     "index.d.ts",
@@ -27,6 +30,8 @@
     "access": "public"
   },
   "devDependencies": {
-    "@rbxts/types": "^1.0.947"
+    "@rbxts/compiler-types": "3.0.0-types.0",
+    "@rbxts/types": "^1.0.947",
+    "typescript": "5.5.3"
   }
 }
