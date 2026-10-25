@@ -1,0 +1,10 @@
+{
+  "compilerOptions": {
+    "strict": true,
+    "noEmit": true,
+    "noLib": true,
+    "types": ["@rbxts/types", "@rbxts/compiler-types"],
+    "skipLibCheck": true
+  },
+  "files": ["migrations.ts"]
+}
